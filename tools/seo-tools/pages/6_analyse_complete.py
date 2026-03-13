@@ -111,11 +111,46 @@ def fetch_woo_products(store_domain, progress_bar=None):
 # FONCTIONS EXTRACTION
 # ═════════════════════════════════════════════
 
+# All known tag prefixes for Shopify fashion sites
+TAG_PREFIXES = {
+    "matiere": "matières", "matière": "matières",
+    "couleur": "couleurs",
+    "coupe": "coupes",
+    "forme": "formes",
+    "motif": "motifs",
+    "collection": "collections",
+    "saison": "saisons",
+    "genre": "genre",
+    "guide": "guides_tailles",
+    "categorie": "categories", "catégorie": "categories",
+}
+
+
 def extract_tag_values(tags, prefix):
     if isinstance(tags, list):
         return [t.split(":", 1)[1].strip().capitalize()
                 for t in tags if isinstance(t, str) and t.lower().startswith(prefix + ":")]
     return []
+
+
+def extract_all_tag_groups(tags):
+    """Extract all tag prefix groups dynamically."""
+    groups = defaultdict(list)
+    if not isinstance(tags, list):
+        return groups
+    for t in tags:
+        if not isinstance(t, str) or ":" not in t:
+            continue
+        prefix, value = t.split(":", 1)
+        prefix = prefix.strip().lower()
+        value = value.strip()
+        if value:
+            # Map to canonical group name
+            group = TAG_PREFIXES.get(prefix, prefix)
+            cap_val = value.capitalize() if not value[0].isupper() else value
+            if cap_val not in groups[group]:
+                groups[group].append(cap_val)
+    return groups
 
 
 def extract_materials_from_description(html_body):
@@ -142,19 +177,29 @@ def parse_shopify_product(p, store_domain):
     tags = p.get("tags", [])
     body = p.get("body_html", "")
     product_type = p.get("product_type", "Non défini")
-    materials = extract_tag_values(tags, "matiere") or extract_tag_values(tags, "matière")
+
+    # Extract all tag groups dynamically
+    tag_groups = extract_all_tag_groups(tags)
+
+    materials = tag_groups.get("matières", [])
     if not materials:
         materials = extract_materials_from_description(body)
-    colors = extract_tag_values(tags, "couleur")
-    coupes = extract_tag_values(tags, "coupe")
-    formes = extract_tag_values(tags, "forme")
-    collections = [t.split(":", 1)[1].strip() for t in tags
-                   if isinstance(t, str) and t.lower().startswith("collection:")]
+    colors = tag_groups.get("couleurs", [])
+    coupes = tag_groups.get("coupes", [])
+    formes = tag_groups.get("formes", [])
+    motifs = tag_groups.get("motifs", [])
+    collections = tag_groups.get("collections", [])
+    saisons = tag_groups.get("saisons", [])
+    genre = tag_groups.get("genre", [])
+    guides = tag_groups.get("guides_tailles", [])
+    categories = tag_groups.get("categories", [])
+
     variants = p.get("variants", [])
     price = float(variants[0].get("price", 0)) if variants else None
     compare_price = None
     if variants and variants[0].get("compare_at_price"):
         compare_price = float(variants[0]["compare_at_price"])
+
     return {
         "title": p.get("title", ""),
         "type": product_type,
@@ -167,7 +212,13 @@ def parse_shopify_product(p, store_domain):
         "coupes_str": ", ".join(coupes) if coupes else "",
         "formes": formes,
         "formes_str": ", ".join(formes) if formes else "",
+        "motifs": motifs,
+        "motifs_str": ", ".join(motifs) if motifs else "",
         "collections": collections,
+        "saisons": saisons,
+        "genre": genre,
+        "guides": guides,
+        "categories": categories,
         "price": price,
         "compare_price": compare_price,
         "url": f"https://{store_domain}/products/{p.get('handle', '')}",
@@ -199,22 +250,14 @@ def parse_woo_product(p, store_domain):
     if permalink and not permalink.startswith("http"):
         permalink = f"https://{store_domain}/product/{permalink}"
     return {
-        "title": name,
-        "type": product_type,
-        "materials": materials,
-        "materials_str": ", ".join(materials) if materials else "Non renseigné",
+        "title": name, "type": product_type,
+        "materials": materials, "materials_str": ", ".join(materials) if materials else "Non renseigné",
         "composition": extract_composition(body),
-        "colors": [],
-        "colors_str": "Non renseigné",
-        "coupes": [],
-        "coupes_str": "",
-        "formes": [],
-        "formes_str": "",
-        "collections": categories,
-        "price": price,
-        "compare_price": None,
-        "url": permalink,
-        "tags": tags,
+        "colors": [], "colors_str": "Non renseigné",
+        "coupes": [], "coupes_str": "", "formes": [], "formes_str": "",
+        "motifs": [], "motifs_str": "",
+        "collections": categories, "saisons": [], "genre": [], "guides": [], "categories": [],
+        "price": price, "compare_price": None, "url": permalink, "tags": tags,
     }
 
 
@@ -241,7 +284,12 @@ def analyze_parsed_products(parsed_products):
         "color_count": Counter(),
         "coupe_count": Counter(),
         "forme_count": Counter(),
+        "motif_count": Counter(),
         "collection_count": Counter(),
+        "saison_count": Counter(),
+        "genre_count": Counter(),
+        "guide_count": Counter(),
+        "category_count": Counter(),
         "material_by_type": defaultdict(Counter),
         "coupe_by_type": defaultdict(Counter),
         "price_by_material": defaultdict(list),
@@ -255,6 +303,7 @@ def analyze_parsed_products(parsed_products):
         ptype = p["type"]
         results["type_count"][ptype] += 1
         results["taxonomy"]["Type de produit"].add(ptype)
+
         for mat in p["materials"]:
             results["materials_count"][mat] += 1
             results["material_by_type"][mat][ptype] += 1
@@ -262,21 +311,46 @@ def analyze_parsed_products(parsed_products):
             if p["price"]:
                 results["price_by_material"][mat].append(p["price"])
             results["combos_type_mat"][f"{ptype.lower()} {mat.lower()}"] += 1
+
         for col in p["colors"]:
             results["color_count"][col] += 1
             results["taxonomy"]["Couleurs"].add(col)
             results["combos_type_col"][f"{ptype.lower()} {col.lower()}"] += 1
+
         for coupe in p["coupes"]:
             results["coupe_count"][coupe] += 1
             results["coupe_by_type"][coupe][ptype] += 1
             results["taxonomy"]["Coupes"].add(coupe)
             results["combos_type_coupe"][f"{ptype.lower()} {coupe.lower()}"] += 1
+
         for forme in p["formes"]:
             results["forme_count"][forme] += 1
             results["taxonomy"]["Formes"].add(forme)
+
+        for motif in p.get("motifs", []):
+            results["motif_count"][motif] += 1
+            results["taxonomy"]["Motifs"].add(motif)
+
         for coll in p["collections"]:
             results["collection_count"][coll] += 1
             results["taxonomy"]["Collections"].add(coll)
+
+        for saison in p.get("saisons", []):
+            results["saison_count"][saison] += 1
+            results["taxonomy"]["Saisons"].add(saison)
+
+        for g in p.get("genre", []):
+            results["genre_count"][g] += 1
+            results["taxonomy"]["Genre"].add(g)
+
+        for guide in p.get("guides", []):
+            results["guide_count"][guide] += 1
+            results["taxonomy"]["Guides de tailles"].add(guide)
+
+        for cat in p.get("categories", []):
+            results["category_count"][cat] += 1
+            results["taxonomy"]["Catégories principales"].add(cat)
+
     return results
 
 
@@ -316,17 +390,32 @@ def detect_ahrefs_type(df):
 
 def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials):
     rows = []
+
+    # Build page index by top keyword AND by URL slugs
     page_index = {}
+    url_index = {}
     if df_pages is not None and not df_pages.empty:
         for _, row in df_pages.iterrows():
             kw = str(row.get("Top keyword", "")).strip().lower()
+            url = str(row.get("URL", ""))
             if kw:
                 page_index[kw] = {
-                    "url": row.get("URL", ""),
+                    "url": url,
                     "position": row.get("Top keyword: Position", ""),
                     "traffic": row.get("Traffic", 0),
                     "keywords_count": row.get("Keywords", 0),
+                    "top_keyword": row.get("Top keyword", ""),
                 }
+            if url:
+                url_index[url.lower()] = page_index.get(kw, {
+                    "url": url,
+                    "position": row.get("Top keyword: Position", ""),
+                    "traffic": row.get("Traffic", 0),
+                    "keywords_count": row.get("Keywords", 0),
+                    "top_keyword": row.get("Top keyword", ""),
+                })
+
+    # Build volume index
     vol_index = {}
     if df_keywords is not None and not df_keywords.empty:
         for _, row in df_keywords.iterrows():
@@ -347,48 +436,81 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials):
         cpc = vol_data.get("cpc", "N/A")
         tp = vol_data.get("traffic_potential", "N/A")
 
+        # 1. Exact match on top keyword
         page_data = page_index.get(combo_lower, {})
         page_url = page_data.get("url", "")
         position = page_data.get("position", "")
         traffic = page_data.get("traffic", 0)
+        top_kw_page = page_data.get("top_keyword", "")
+        nb_kw_page = page_data.get("keywords_count", 0)
 
+        # 2. Partial match: slug in URL
+        correspondance = ""
         if not page_url and df_pages is not None:
+            slug = combo_lower.replace(" ", "-")
             for _, prow in df_pages.iterrows():
                 url = str(prow.get("URL", "")).lower()
-                slug = combo_lower.replace(" ", "-")
                 if slug in url:
                     page_url = prow.get("URL", "")
                     position = prow.get("Top keyword: Position", "")
                     traffic = prow.get("Traffic", 0)
+                    top_kw_page = prow.get("Top keyword", "")
+                    nb_kw_page = prow.get("Keywords", 0)
+                    # Check if it's a dedicated page or partial
+                    url_path = url.split("/")[-1] if "/" in url else url
+                    if slug == url_path or slug == url_path.replace("-homme", "").replace("-femme", ""):
+                        correspondance = "Page dédiée"
+                    else:
+                        correspondance = "Page partielle"
                     break
 
-        if page_url and position:
+        # Determine correspondance and action
+        if page_url and not correspondance:
+            try:
+                pos_int = int(float(str(position)))
+            except (ValueError, TypeError):
+                pos_int = 99
+            # Check if the page URL slug matches the keyword closely
+            slug = combo_lower.replace(" ", "-")
+            url_lower = page_url.lower()
+            if slug in url_lower:
+                correspondance = "Page dédiée"
+            else:
+                correspondance = "Page partielle"
+        elif not page_url:
+            correspondance = "Pas de page"
+
+        # Determine action
+        if correspondance == "Pas de page":
+            action = "Créer page"
+        elif correspondance == "Page partielle":
+            action = "Optimiser"
+        else:
             try:
                 pos_int = int(float(str(position)))
             except (ValueError, TypeError):
                 pos_int = 99
             if pos_int <= 3:
-                statut = "🟢 Top 3"
+                action = "Suivre"
             elif pos_int <= 10:
-                statut = "🟡 Top 10"
-            elif pos_int <= 20:
-                statut = "🟠 Page 2"
+                action = "Optimiser"
             else:
-                statut = "⚪ > 20"
-        else:
-            statut = "🔴 Pas de page"
+                action = "Améliorer"
 
         rows.append({
             "Mot-clé": combo_kw,
-            "Matière": ", ".join(materials) if materials else "",
             "Volume": volume,
+            "Position top KW": position if position else None,
             "KD": kd,
-            "CPC (€)": cpc,
             "Potentiel trafic": tp,
-            "Page qui ranke": page_url,
-            "Position": position if position else "—",
-            "Traffic actuel": traffic if traffic else 0,
-            "Statut": statut,
+            "CPC (€)": cpc,
+            "Correspondance": correspondance,
+            "URL": page_url if page_url else None,
+            "Trafic page": traffic if traffic else None,
+            "Top KW page": top_kw_page if top_kw_page else None,
+            "Nb KW page": nb_kw_page if nb_kw_page else None,
+            "Action recommandée": action,
+            "_matiere": ", ".join(materials) if materials else "",
         })
 
     df = pd.DataFrame(rows)
@@ -401,6 +523,15 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials):
 # ═════════════════════════════════════════════
 # EXPORT EXCEL 10 ONGLETS
 # ═════════════════════════════════════════════
+
+def make_bar(count, max_count):
+    """Generate a visual bar like ████████"""
+    if not max_count or not count:
+        return ""
+    ratio = min(count / max_count, 1.0)
+    bars = int(ratio * 20)
+    return "█" * bars
+
 
 def build_excel(results, df_matched, store_name):
     buffer = BytesIO()
@@ -419,8 +550,8 @@ def build_excel(results, df_matched, store_name):
 
     # 1. Par Matière
     ws = wb.active
-    ws.title = "Par Matière"
-    ws.append(["Matière", "Nb produits", "% catalogue", "Prix moyen", "Prix min", "Prix max"])
+    ws.title = "📊 Par Matière"
+    ws.append(["Matière", "Nb produits", "% du catalogue", "Prix moyen (€)", "Prix min (€)", "Prix max (€)"])
     style_header(ws, 6)
     for mat, count in results["materials_count"].most_common():
         prices = results["price_by_material"].get(mat, [])
@@ -430,14 +561,14 @@ def build_excel(results, df_matched, store_name):
                     round(max(prices), 2) if prices else ""])
 
     # 2. Par Type
-    ws2 = wb.create_sheet("Par Type")
-    ws2.append(["Type", "Nb produits", "% catalogue"])
+    ws2 = wb.create_sheet("📦 Par Type")
+    ws2.append(["Type de produit", "Nombre", "% du catalogue"])
     style_header(ws2, 3)
     for t, c in results["type_count"].most_common():
         ws2.append([t, c, f"{c/total*100:.1f}%"])
 
     # 3. Matière x Type
-    ws3 = wb.create_sheet("Matière x Type")
+    ws3 = wb.create_sheet("🔀 Matière x Type")
     all_types = sorted(set(t for mat_c in results["material_by_type"].values() for t in mat_c))
     ws3.append(["Matière"] + all_types)
     style_header(ws3, 1 + len(all_types))
@@ -445,109 +576,160 @@ def build_excel(results, df_matched, store_name):
         ws3.append([mat] + [tc.get(t, 0) for t in all_types])
 
     # 4. Par Couleur
-    ws4 = wb.create_sheet("Par Couleur")
-    ws4.append(["Couleur", "Nb produits", "% catalogue"])
+    ws4 = wb.create_sheet("🎨 Par Couleur")
+    ws4.append(["Couleur", "Nombre", "% du catalogue"])
     style_header(ws4, 3)
     for col, c in results["color_count"].most_common():
         ws4.append([col, c, f"{c/total*100:.1f}%"])
 
     # 5. Par Coupe
-    ws5 = wb.create_sheet("Par Coupe")
-    ws5.append(["Coupe", "Nb produits", "% catalogue"])
+    ws5 = wb.create_sheet("📐 Par Coupe")
+    ws5.append(["Coupe", "Nb produits", "% du catalogue"])
     style_header(ws5, 3)
     for cp, c in results["coupe_count"].most_common():
         ws5.append([cp, c, f"{c/total*100:.1f}%"])
 
     # 6. Tous les produits
-    ws6 = wb.create_sheet("Tous les produits")
-    ws6.append(["Produit", "Type", "Matières", "Composition", "Couleurs", "Coupes", "Formes", "Prix", "Ancien prix", "URL"])
+    ws6 = wb.create_sheet("📋 Tous les produits")
+    ws6.append(["Produit", "Type", "Matières", "Composition", "Couleurs", "Coupes", "Formes", "Prix (€)", "Ancien prix (€)", "URL"])
     style_header(ws6, 10)
     for p in results["products"]:
         ws6.append([p["title"], p["type"], p["materials_str"], p["composition"],
                      p["colors_str"], p["coupes_str"], p["formes_str"],
                      p["price"], p.get("compare_price", ""), p["url"]])
 
-    # 7. Taxonomie
-    ws7 = wb.create_sheet("Taxonomie")
+    # 7. Taxonomie — 11 colonnes comme le ref
+    ws7 = wb.create_sheet("🗂 Taxonomie")
+    tax_cols_order = [
+        "Type de produit", "Catégories principales", "Matières", "Couleurs",
+        "Coupes", "Formes", "Motifs", "Collections", "Saisons", "Genre", "Guides de tailles"
+    ]
     taxonomy = results["taxonomy"]
-    if taxonomy:
-        all_attrs = sorted(taxonomy.keys())
-        max_len = max(len(v) for v in taxonomy.values()) if taxonomy else 0
-        ws7.append(all_attrs)
-        style_header(ws7, len(all_attrs))
-        for i in range(max_len):
-            row = []
-            for attr in all_attrs:
-                vals = sorted(taxonomy[attr])
-                row.append(vals[i] if i < len(vals) else "")
-            ws7.append(row)
+    # Ensure all expected columns exist
+    for col in tax_cols_order:
+        if col not in taxonomy:
+            taxonomy[col] = set()
+    max_len = max((len(v) for v in taxonomy.values()), default=0)
+    ws7.append(tax_cols_order)
+    style_header(ws7, len(tax_cols_order))
+    for i in range(max_len):
+        row = []
+        for attr in tax_cols_order:
+            vals = sorted(taxonomy.get(attr, set()))
+            row.append(vals[i] if i < len(vals) else "")
+        ws7.append(row)
 
-    # 8. Mots-clés SEO
-    ws8 = wb.create_sheet("Mots-clés SEO")
-    headers_seo = ["cat", "cat + matières", "cat + couleurs", "cat + coupes", "cat + formes"]
+    # 8. Mots-clés SEO — 8 colonnes comme le ref
+    ws8 = wb.create_sheet("🔑 Mots-clés SEO")
+    headers_seo = ["cat", "cat + sous cat", "cat + matières", "cat + couleurs",
+                    "cat + coupes", "cat + formes", "cat + motifs", "cat + saisons"]
     ws8.append(headers_seo)
     style_header(ws8, len(headers_seo))
+
     types_list = sorted(results["type_count"].keys())
+    cats_list = sorted(results["category_count"].keys()) if results.get("category_count") else []
     mats_list = sorted(results["materials_count"].keys())
     cols_list = sorted(results["color_count"].keys())
     coupes_list = sorted(results["coupe_count"].keys())
     formes_list = sorted(results["forme_count"].keys())
-    max_combos = max(
-        len(types_list) * max(len(mats_list), 1),
-        len(types_list) * max(len(cols_list), 1),
-        len(types_list) * max(len(coupes_list), 1),
-        len(types_list) * max(len(formes_list), 1),
-        1
-    )
-    idx = 0
-    for t in types_list:
-        for mat in (mats_list or [""]):
-            row = [t if idx == 0 or mat == mats_list[0] else ""]
-            row.append(f"{t.lower()} {mat.lower()}" if mat else "")
-            # couleur
-            col_val = cols_list[idx % len(cols_list)] if cols_list and idx < len(types_list) * len(cols_list) else ""
-            row.append(f"{t.lower()} {col_val.lower()}" if col_val else "")
-            # coupe
-            cp_val = coupes_list[idx % len(coupes_list)] if coupes_list and idx < len(types_list) * len(coupes_list) else ""
-            row.append(f"{t.lower()} {cp_val.lower()}" if cp_val else "")
-            # forme
-            fm_val = formes_list[idx % len(formes_list)] if formes_list and idx < len(types_list) * len(formes_list) else ""
-            row.append(f"{t.lower()} {fm_val.lower()}" if fm_val else "")
+    motifs_list = sorted(results["motif_count"].keys()) if results.get("motif_count") else []
+    saisons_list = sorted(results["saison_count"].keys()) if results.get("saison_count") else []
+
+    # Generate all combinations row by row
+    # Each row: cat | cat + sous-cat | cat + matière | cat + couleur | cat + coupe | cat + forme | cat + motif | cat + saison
+    all_lists = [cats_list, mats_list, cols_list, coupes_list, formes_list, motifs_list, saisons_list]
+    max_per_type = max((len(lst) for lst in all_lists), default=1) or 1
+
+    for t_idx, t in enumerate(types_list):
+        for i in range(max_per_type):
+            row = []
+            # col 0: cat (only on first row per type)
+            row.append(t if i == 0 else "")
+            # col 1: cat + sous cat
+            row.append(f"{t.lower()} {cats_list[i].lower()}" if i < len(cats_list) else "")
+            # col 2: cat + matières
+            row.append(f"{t.lower()} {mats_list[i].lower()}" if i < len(mats_list) else "")
+            # col 3: cat + couleurs
+            row.append(f"{t.lower()} {cols_list[i].lower()}" if i < len(cols_list) else "")
+            # col 4: cat + coupes
+            row.append(f"{t.lower()} {coupes_list[i].lower()}" if i < len(coupes_list) else "")
+            # col 5: cat + formes
+            row.append(f"{t.lower()} {formes_list[i].lower()}" if i < len(formes_list) else "")
+            # col 6: cat + motifs
+            row.append(f"{t.lower()} {motifs_list[i].lower()}" if i < len(motifs_list) else "")
+            # col 7: cat + saisons
+            row.append(f"{t.lower()} {saisons_list[i].lower()}" if i < len(saisons_list) else "")
             ws8.append(row)
-            idx += 1
 
-    # 9. Top Combinaisons
-    ws9 = wb.create_sheet("Top Combinaisons")
-    ws9.append(["Combinaison", "Nb produits", "% du total"])
-    style_header(ws9, 3)
-    for combo, count in results["combos_type_mat"].most_common():
-        ws9.append([combo, count, f"{count/total*100:.1f}%"])
+    # 9. Top Combinaisons — with visual bar + Ahrefs data
+    ws9 = wb.create_sheet("🏆 Top Combinaisons")
+    # Title row
+    ws9.append(["🧵 Type + Matière", None, "Ex: chemise coton, pull laine..."])
+    ws9.merge_cells("A1:C1")
+    ws9.cell(1, 1).font = Font(bold=True, size=13)
 
-    # 10. Requêtes vs Pages
+    ws9.append(["Combinaison", "Nb produits", "% du total", None, "Volume", "KD", "Potentiel trafic", "CPC (€)"])
+    style_header(ws9, 8, row=2)
+
+    # Build vol_index for Ahrefs enrichment
+    vol_index = {}
+    if "ac_df_keywords" in st.session_state:
+        for _, row in st.session_state["ac_df_keywords"].iterrows():
+            kw = str(row.get("Keyword", "")).strip().lower()
+            if kw:
+                vol_index[kw] = {
+                    "volume": row.get("Volume", ""),
+                    "kd": row.get("Difficulty", ""),
+                    "tp": row.get("Traffic potential", ""),
+                    "cpc": row.get("CPC", ""),
+                }
+
+    combos_sorted = results["combos_type_mat"].most_common()
+    max_combo_count = combos_sorted[0][1] if combos_sorted else 1
+    for combo, count in combos_sorted:
+        bar = make_bar(count, max_combo_count)
+        vd = vol_index.get(combo.lower(), {})
+        ws9.append([
+            combo, count, f"{count/total*100:.1f}%", bar,
+            vd.get("volume", ""), vd.get("kd", ""),
+            vd.get("tp", ""), vd.get("cpc", ""),
+        ])
+
+    # 10. Requêtes vs Pages — matching ref format
     if df_matched is not None and not df_matched.empty:
-        ws10 = wb.create_sheet("Requêtes vs Pages")
-        cols_export = ["Mot-clé", "Matière", "Volume", "KD", "Potentiel trafic", "CPC (€)",
-                        "Statut", "Page qui ranke", "Position", "Traffic actuel"]
+        ws10 = wb.create_sheet("🔍 Requêtes vs Pages")
+        cols_export = ["Mot-clé", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+                        "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
+
         for _, row in df_matched.iterrows():
             ws10.append([row.get(c, "") for c in cols_export])
 
-        # Couleurs par statut
-        status_colors = {
-            "🟢 Top 3": "27AE60",
-            "🟡 Top 10": "F1C40F",
-            "🟠 Page 2": "E67E22",
-            "⚪ > 20": "BDC3C7",
-            "🔴 Pas de page": "E74C3C",
+        # Color correspondance column
+        corresp_colors = {
+            "Pas de page": "E74C3C",
+            "Page partielle": "F1C40F",
+            "Page dédiée": "27AE60",
         }
-        statut_col_idx = cols_export.index("Statut") + 1
+        corresp_col_idx = cols_export.index("Correspondance") + 1
+        action_col_idx = cols_export.index("Action recommandée") + 1
         for row_idx in range(2, ws10.max_row + 1):
-            cell = ws10.cell(row=row_idx, column=statut_col_idx)
-            color = status_colors.get(str(cell.value), "FFFFFF")
-            cell.fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
-            if color in ("27AE60", "E74C3C"):
-                cell.font = Font(color="FFFFFF", bold=True)
+            cell = ws10.cell(row=row_idx, column=corresp_col_idx)
+            color = corresp_colors.get(str(cell.value), "FFFFFF")
+            if color != "FFFFFF":
+                cell.fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+                if color in ("E74C3C", "27AE60"):
+                    cell.font = Font(color="FFFFFF", bold=True)
+
+            # Color action column
+            action_cell = ws10.cell(row=row_idx, column=action_col_idx)
+            action_colors = {"Créer page": "E74C3C", "Optimiser": "F1C40F", "Améliorer": "E67E22", "Suivre": "27AE60"}
+            ac = action_colors.get(str(action_cell.value), "FFFFFF")
+            if ac != "FFFFFF":
+                action_cell.fill = PatternFill(start_color=ac, end_color=ac, fill_type="solid")
+                if ac in ("E74C3C", "27AE60"):
+                    action_cell.font = Font(color="FFFFFF", bold=True)
 
     wb.save(buffer)
     return buffer.getvalue()
@@ -560,7 +742,6 @@ def build_excel(results, df_matched, store_name):
 with st.sidebar:
     st.header("📥 Sources de données")
 
-    # 1. URL du site
     st.markdown("**1. Site e-commerce**")
     store_url = st.text_input("URL du site", placeholder="www.balibaris.com",
                                help="Shopify ou WooCommerce")
@@ -593,24 +774,20 @@ with st.sidebar:
             else:
                 st.error("❌ Aucun produit trouvé")
 
-    # Statut produits
     if "ac_results" in st.session_state:
         r = st.session_state["ac_results"]
         st.success(f"✅ {r['total']} produits chargés")
 
     st.divider()
 
-    # 2. CSV Mots-clés
     st.markdown("**2. Mots-clés Ahrefs**")
     uploaded_kw = st.file_uploader("CSV Keywords", type=["csv"], key="ac_kw",
                                     help="Export Ahrefs Keywords Explorer")
 
-    # 3. CSV Top Pages
     st.markdown("**3. Top Pages Ahrefs**")
     uploaded_pages = st.file_uploader("CSV Top Pages", type=["csv"], key="ac_pages",
                                        help="Export Ahrefs Top Pages")
 
-    # Parser les CSV
     df_keywords = None
     df_pages = None
 
@@ -630,7 +807,7 @@ with st.sidebar:
 
 
 # ═════════════════════════════════════════════
-# ZONE PRINCIPALE — RÉSULTATS
+# ZONE PRINCIPALE
 # ═════════════════════════════════════════════
 
 has_products = "ac_results" in st.session_state
@@ -640,7 +817,6 @@ if not has_products and not has_ahrefs:
     st.info("👈 Utilise la sidebar pour charger tes données : URL du site + exports Ahrefs.")
     st.stop()
 
-# Préparer le matching si on a assez de données
 df_matched = pd.DataFrame()
 combos_with_materials = {}
 
@@ -649,7 +825,6 @@ if has_products:
     store = st.session_state.get("ac_store", "site")
     total = results["total"]
 
-    # Construire les combos
     for combo_key in results.get("combos_type_mat", {}):
         parts = combo_key.split()
         if len(parts) >= 2:
@@ -685,7 +860,6 @@ tab_idx = 0
 # ── TAB CATALOGUE ──
 if has_products:
     with tabs[tab_idx]:
-        # KPIs
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Produits", total)
         c2.metric("Types", len(results["type_count"]))
@@ -781,14 +955,18 @@ if has_products:
             st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
-        st.markdown("#### Taxonomie")
+        st.markdown("#### Taxonomie complète")
         taxonomy = results["taxonomy"]
         if taxonomy:
-            max_len = max(len(v) for v in taxonomy.values())
+            tax_cols_order = [
+                "Type de produit", "Catégories principales", "Matières", "Couleurs",
+                "Coupes", "Formes", "Motifs", "Collections", "Saisons", "Genre", "Guides de tailles"
+            ]
+            max_len = max((len(taxonomy.get(c, set())) for c in tax_cols_order), default=0)
             tax_data = {}
-            for col_name, values in sorted(taxonomy.items()):
-                sorted_vals = sorted(values)
-                tax_data[f"{col_name} ({len(sorted_vals)})"] = sorted_vals + [""] * (max_len - len(sorted_vals))
+            for col_name in tax_cols_order:
+                vals = sorted(taxonomy.get(col_name, set()))
+                tax_data[col_name] = vals + [""] * (max_len - len(vals))
             st.dataframe(pd.DataFrame(tax_data), use_container_width=True, hide_index=True)
 
         st.divider()
@@ -805,23 +983,27 @@ if has_products:
 
     # ── TAB MOTS-CLÉS SEO ──
     with tabs[tab_idx]:
-        st.markdown("#### Combinaisons type + attribut")
+        st.markdown("#### Combinaisons SEO — toutes les combinaisons type + attribut")
 
         if results["combos_type_mat"]:
-            st.markdown("**Type + Matière** (top 30)")
-            df_combos = pd.DataFrame(results["combos_type_mat"].most_common(30),
-                                      columns=["Combinaison", "Nb produits"])
-            df_combos["% du total"] = (df_combos["Nb produits"] / total * 100).round(1)
-            st.dataframe(df_combos, use_container_width=True, hide_index=True)
+            st.markdown("**🏆 Top Combinaisons Type + Matière**")
+            combos_sorted = results["combos_type_mat"].most_common(50)
+            max_c = combos_sorted[0][1] if combos_sorted else 1
+            combo_rows = []
+            for combo, count in combos_sorted:
+                bar = make_bar(count, max_c)
+                combo_rows.append({"Combinaison": combo, "Nb produits": count,
+                                    "% du total": f"{count/total*100:.1f}%", "": bar})
+            st.dataframe(pd.DataFrame(combo_rows), use_container_width=True, hide_index=True)
 
         if results["combos_type_col"]:
-            st.markdown("**Type + Couleur** (top 30)")
+            st.markdown("**🎨 Type + Couleur** (top 30)")
             df_cc = pd.DataFrame(results["combos_type_col"].most_common(30),
                                   columns=["Combinaison", "Nb produits"])
             st.dataframe(df_cc, use_container_width=True, hide_index=True)
 
         if results["combos_type_coupe"]:
-            st.markdown("**Type + Coupe** (top 30)")
+            st.markdown("**📐 Type + Coupe** (top 30)")
             df_ccp = pd.DataFrame(results["combos_type_coupe"].most_common(30),
                                    columns=["Combinaison", "Nb produits"])
             st.dataframe(df_ccp, use_container_width=True, hide_index=True)
@@ -836,74 +1018,69 @@ if has_ahrefs:
         else:
             import plotly.express as px
 
-            # Filtres
             st.markdown("### 🎛️ Filtres")
             fc1, fc2, fc3 = st.columns(3)
             with fc1:
                 all_materials = sorted(set(m for mats in combos_with_materials.values() for m in mats if m))
                 sel_mat = st.multiselect("🧵 Matière", options=all_materials, default=[])
             with fc2:
-                all_statuts = sorted(df_matched["Statut"].unique())
-                sel_stat = st.multiselect("📌 Statut", options=all_statuts, default=[])
+                all_corresp = sorted(df_matched["Correspondance"].unique())
+                sel_corresp = st.multiselect("📌 Correspondance", options=all_corresp, default=[])
             with fc3:
                 vol_min = st.number_input("🔢 Volume min", min_value=0, value=0, step=100)
 
             df_display = df_matched.copy()
             if sel_mat:
-                df_display = df_display[df_display["Matière"].apply(
+                df_display = df_display[df_display["_matiere"].apply(
                     lambda x: any(m.lower() in str(x).lower() for m in sel_mat))]
-            if sel_stat:
-                df_display = df_display[df_display["Statut"].isin(sel_stat)]
+            if sel_corresp:
+                df_display = df_display[df_display["Correspondance"].isin(sel_corresp)]
             if vol_min > 0:
                 df_display = df_display[pd.to_numeric(df_display["Volume"], errors="coerce").fillna(0) >= vol_min]
 
             # KPIs
             total_kw = len(df_display)
-            with_page = len(df_display[df_display["Statut"] != "🔴 Pas de page"])
-            without_page = len(df_display[df_display["Statut"] == "🔴 Pas de page"])
-            top3 = len(df_display[df_display["Statut"] == "🟢 Top 3"])
-            to_opt = len(df_display[df_display["Statut"].isin(["🟡 Top 10", "🟠 Page 2"])])
+            dedicated = len(df_display[df_display["Correspondance"] == "Page dédiée"])
+            partial = len(df_display[df_display["Correspondance"] == "Page partielle"])
+            no_page = len(df_display[df_display["Correspondance"] == "Pas de page"])
+            with_page = dedicated + partial
 
             k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("Total", total_kw)
-            k2.metric("🟢 Top 3", top3)
-            k3.metric("🟡 À optimiser", to_opt)
-            k4.metric("🔴 Sans page", without_page)
+            k2.metric("🟢 Page dédiée", dedicated)
+            k3.metric("🟡 Page partielle", partial)
+            k4.metric("🔴 Pas de page", no_page)
             k5.metric("Couverture", f"{round(with_page/max(total_kw,1)*100)}%")
 
             # Charts
             ch1, ch2 = st.columns(2)
             with ch1:
-                statut_counts = df_display["Statut"].value_counts()
-                fig = px.pie(values=statut_counts.values, names=statut_counts.index,
-                            title="Répartition des statuts",
+                corresp_counts = df_display["Correspondance"].value_counts()
+                fig = px.pie(values=corresp_counts.values, names=corresp_counts.index,
+                            title="Correspondance",
                             color_discrete_map={
-                                "🟢 Top 3": "#2ecc71", "🟡 Top 10": "#f1c40f",
-                                "🟠 Page 2": "#e67e22", "⚪ > 20": "#bdc3c7",
-                                "🔴 Pas de page": "#e74c3c"})
+                                "Page dédiée": "#2ecc71", "Page partielle": "#f1c40f",
+                                "Pas de page": "#e74c3c"})
                 st.plotly_chart(fig, use_container_width=True)
             with ch2:
-                mat_opps = {}
-                for _, row in df_matched.iterrows():
-                    if row["Statut"] == "🔴 Pas de page" and row["Matière"]:
-                        for m in str(row["Matière"]).split(","):
-                            m = m.strip()
-                            if m:
-                                mat_opps[m] = mat_opps.get(m, 0) + 1
-                if mat_opps:
-                    df_opp = pd.DataFrame(sorted(mat_opps.items(), key=lambda x: -x[1]),
-                                           columns=["Matière", "KW sans page"])
-                    fig2 = px.bar(df_opp.head(15), x="Matière", y="KW sans page",
-                                  title="🔴 Opportunités par matière")
-                    st.plotly_chart(fig2, use_container_width=True)
+                action_counts = df_display["Action recommandée"].value_counts()
+                fig2 = px.bar(x=action_counts.index, y=action_counts.values,
+                              title="Actions recommandées",
+                              labels={"x": "Action", "y": "Nb mots-clés"},
+                              color=action_counts.index,
+                              color_discrete_map={
+                                  "Créer page": "#e74c3c", "Optimiser": "#f1c40f",
+                                  "Améliorer": "#e67e22", "Suivre": "#2ecc71"})
+                st.plotly_chart(fig2, use_container_width=True)
 
-            # Tableau
+            # Table — hide internal _matiere column
             st.markdown("### 📋 Détail")
-            st.dataframe(df_display, use_container_width=True, hide_index=True,
+            display_cols = [c for c in df_display.columns if not c.startswith("_")]
+            st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True,
                           column_config={
-                              "Page qui ranke": st.column_config.LinkColumn("Page"),
+                              "URL": st.column_config.LinkColumn("URL"),
                               "Volume": st.column_config.NumberColumn("Volume", format="%d"),
-                              "Traffic actuel": st.column_config.NumberColumn("Traffic", format="%d"),
+                              "Trafic page": st.column_config.NumberColumn("Trafic page", format="%d"),
                           })
 
             # Vue par matière
@@ -911,14 +1088,15 @@ if has_ahrefs:
                 st.markdown("### 🧵 Vue détaillée par matière")
                 mat_choice = st.selectbox("Matière", options=["Toutes"] + all_materials)
                 if mat_choice != "Toutes":
-                    df_mv = df_matched[df_matched["Matière"].str.contains(mat_choice, case=False, na=False)]
-                    covered = len(df_mv[df_mv["Statut"] != "🔴 Pas de page"])
-                    not_covered = len(df_mv[df_mv["Statut"] == "🔴 Pas de page"])
+                    df_mv = df_matched[df_matched["_matiere"].str.contains(mat_choice, case=False, na=False)]
+                    covered = len(df_mv[df_mv["Correspondance"] != "Pas de page"])
+                    not_covered = len(df_mv[df_mv["Correspondance"] == "Pas de page"])
                     m1, m2, m3 = st.columns(3)
                     m1.metric(f"Mots-clés '{mat_choice}'", len(df_mv))
                     m2.metric("✅ Couverts", covered)
                     m3.metric("🔴 Non couverts", not_covered)
-                    st.dataframe(df_mv, use_container_width=True, hide_index=True)
+                    mv_cols = [c for c in df_mv.columns if not c.startswith("_")]
+                    st.dataframe(df_mv[mv_cols], use_container_width=True, hide_index=True)
 
     tab_idx += 1
 
@@ -928,13 +1106,14 @@ if has_ahrefs:
             st.info("Pas encore de données croisées.")
         else:
             st.markdown("### 🎯 Top Opportunités — mots-clés sans page dédiée")
-            df_opps = df_matched[df_matched["Statut"] == "🔴 Pas de page"].copy()
+            df_opps = df_matched[df_matched["Correspondance"] == "Pas de page"].copy()
             df_opps["_vol"] = pd.to_numeric(df_opps["Volume"], errors="coerce").fillna(0)
             df_opps = df_opps.sort_values("_vol", ascending=False).drop(columns="_vol")
 
             if not df_opps.empty:
                 st.metric("Nombre d'opportunités", len(df_opps))
-                st.dataframe(df_opps, use_container_width=True, hide_index=True,
+                opps_cols = [c for c in df_opps.columns if not c.startswith("_")]
+                st.dataframe(df_opps[opps_cols], use_container_width=True, hide_index=True,
                               column_config={"Volume": st.column_config.NumberColumn("Volume", format="%d")})
             else:
                 st.success("🎉 Toutes les combinaisons sont couvertes !")
@@ -943,12 +1122,16 @@ if has_ahrefs:
 
 # ── TAB EXPORT ──
 with tabs[tab_idx]:
-    st.markdown("### 📥 Export Excel complet")
+    st.markdown("### 📥 Export Excel complet — 10 onglets")
 
     if has_products:
-        st.markdown("L'export contiendra jusqu'à **10 onglets** : Par Matière, Par Type, Matière x Type, "
-                     "Par Couleur, Par Coupe, Tous les produits, Taxonomie, Mots-clés SEO, "
-                     "Top Combinaisons, Requêtes vs Pages.")
+        st.markdown("""
+        **Onglets inclus :**
+        1. 📊 Par Matière  2. 📦 Par Type  3. 🔀 Matière x Type  4. 🎨 Par Couleur
+        5. 📐 Par Coupe  6. 📋 Tous les produits  7. 🗂 Taxonomie (11 colonnes)
+        8. 🔑 Mots-clés SEO (8 colonnes)  9. 🏆 Top Combinaisons (+ Volume/KD/CPC)
+        10. 🔍 Requêtes vs Pages (Correspondance + Action)
+        """)
 
         if st.button("💾 Générer le fichier Excel", type="primary", use_container_width=True):
             excel_data = build_excel(results, df_matched if not df_matched.empty else None, store)
@@ -964,7 +1147,8 @@ with tabs[tab_idx]:
         if st.button("💾 Exporter les positions", type="primary", use_container_width=True):
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                df_matched.to_excel(writer, sheet_name="Positions", index=False)
+                exp_cols = [c for c in df_matched.columns if not c.startswith("_")]
+                df_matched[exp_cols].to_excel(writer, sheet_name="Positions", index=False)
             ts = datetime.now().strftime("%Y%m%d_%H%M")
             st.download_button(
                 "⬇️ Télécharger",
