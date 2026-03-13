@@ -619,7 +619,7 @@ def build_excel(results, df_matched, store_name):
             row.append(vals[i] if i < len(vals) else "")
         ws7.append(row)
 
-    # 8. Mots-clés SEO — 8 colonnes comme le ref
+    # 8. Mots-clés SEO — 8 colonnes, chaque colonne liste TOUTES ses combos indépendamment
     ws8 = wb.create_sheet("🔑 Mots-clés SEO")
     headers_seo = ["cat", "cat + sous cat", "cat + matières", "cat + couleurs",
                     "cat + coupes", "cat + formes", "cat + motifs", "cat + saisons"]
@@ -635,31 +635,32 @@ def build_excel(results, df_matched, store_name):
     motifs_list = sorted(results["motif_count"].keys()) if results.get("motif_count") else []
     saisons_list = sorted(results["saison_count"].keys()) if results.get("saison_count") else []
 
-    # Generate all combinations row by row
-    # Each row: cat | cat + sous-cat | cat + matière | cat + couleur | cat + coupe | cat + forme | cat + motif | cat + saison
-    all_lists = [cats_list, mats_list, cols_list, coupes_list, formes_list, motifs_list, saisons_list]
-    max_per_type = max((len(lst) for lst in all_lists), default=1) or 1
+    # Build each column independently: all combos type x attribute
+    def build_combos(attr_list):
+        combos = []
+        for t in types_list:
+            for attr in attr_list:
+                combos.append(f"{t.lower()} {attr.lower()}")
+        return combos
 
-    for t_idx, t in enumerate(types_list):
-        for i in range(max_per_type):
-            row = []
-            # col 0: cat (only on first row per type)
-            row.append(t if i == 0 else "")
-            # col 1: cat + sous cat
-            row.append(f"{t.lower()} {cats_list[i].lower()}" if i < len(cats_list) else "")
-            # col 2: cat + matières
-            row.append(f"{t.lower()} {mats_list[i].lower()}" if i < len(mats_list) else "")
-            # col 3: cat + couleurs
-            row.append(f"{t.lower()} {cols_list[i].lower()}" if i < len(cols_list) else "")
-            # col 4: cat + coupes
-            row.append(f"{t.lower()} {coupes_list[i].lower()}" if i < len(coupes_list) else "")
-            # col 5: cat + formes
-            row.append(f"{t.lower()} {formes_list[i].lower()}" if i < len(formes_list) else "")
-            # col 6: cat + motifs
-            row.append(f"{t.lower()} {motifs_list[i].lower()}" if i < len(motifs_list) else "")
-            # col 7: cat + saisons
-            row.append(f"{t.lower()} {saisons_list[i].lower()}" if i < len(saisons_list) else "")
-            ws8.append(row)
+    col_cat = types_list
+    col_sous_cat = build_combos(cats_list)
+    col_matieres = build_combos(mats_list)
+    col_couleurs = build_combos(cols_list)
+    col_coupes = build_combos(coupes_list)
+    col_formes = build_combos(formes_list)
+    col_motifs = build_combos(motifs_list)
+    col_saisons = build_combos(saisons_list)
+
+    all_columns = [col_cat, col_sous_cat, col_matieres, col_couleurs,
+                    col_coupes, col_formes, col_motifs, col_saisons]
+    max_rows = max(len(c) for c in all_columns) if all_columns else 0
+
+    for i in range(max_rows):
+        row = []
+        for col_data in all_columns:
+            row.append(col_data[i] if i < len(col_data) else "")
+        ws8.append(row)
 
     # 9. Top Combinaisons — with visual bar + Ahrefs data
     ws9 = wb.create_sheet("🏆 Top Combinaisons")
