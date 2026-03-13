@@ -296,6 +296,8 @@ def analyze_parsed_products(parsed_products):
         "combos_type_mat": Counter(),
         "combos_type_col": Counter(),
         "combos_type_coupe": Counter(),
+        "combos_type_coll": Counter(),
+        "combos_mat_col": Counter(),
         "taxonomy": defaultdict(set),
         "total": len(parsed_products),
     }
@@ -334,6 +336,7 @@ def analyze_parsed_products(parsed_products):
         for coll in p["collections"]:
             results["collection_count"][coll] += 1
             results["taxonomy"]["Collections"].add(coll)
+            results["combos_type_coll"][f"{ptype.lower()} {coll.lower()}"] += 1
 
         for saison in p.get("saisons", []):
             results["saison_count"][saison] += 1
@@ -350,6 +353,11 @@ def analyze_parsed_products(parsed_products):
         for cat in p.get("categories", []):
             results["category_count"][cat] += 1
             results["taxonomy"]["Catégories principales"].add(cat)
+
+        # Triple combo: type + matière + couleur
+        for mat in p["materials"]:
+            for col in p["colors"]:
+                results["combos_mat_col"][f"{ptype.lower()} {mat.lower()} {col.lower()}"] += 1
 
     return results
 
@@ -664,15 +672,8 @@ def build_excel(results, df_matched, store_name):
             row.append(col_data[i] if i < len(col_data) else "")
         ws8.append(row)
 
-    # 9. Top Combinaisons — with visual bar + Ahrefs data
+    # 9. Top Combinaisons — with visual bar + Ahrefs data (5 sections)
     ws9 = wb.create_sheet("🏆 Top Combinaisons")
-    # Title row
-    ws9.append(["🧵 Type + Matière", None, "Ex: chemise coton, pull laine..."])
-    ws9.merge_cells("A1:C1")
-    ws9.cell(1, 1).font = Font(bold=True, size=13)
-
-    ws9.append(["Combinaison", "Nb produits", "% du total", None, "Volume", "KD", "Potentiel trafic", "CPC (€)"])
-    style_header(ws9, 8, row=2)
 
     # Build vol_index for Ahrefs enrichment
     vol_index = {}
@@ -687,27 +688,58 @@ def build_excel(results, df_matched, store_name):
                     "cpc": row.get("CPC", ""),
                 }
 
-    combos_sorted = results["combos_type_mat"].most_common()
-    max_combo_count = combos_sorted[0][1] if combos_sorted else 1
-    for combo, count in combos_sorted:
-        bar = make_bar(count, max_combo_count)
-        vd = vol_index.get(combo.lower(), {})
-        ws9.append([
-            combo, count, f"{count/total*100:.1f}%", bar,
-            vd.get("volume", ""), vd.get("kd", ""),
-            vd.get("tp", ""), vd.get("cpc", ""),
-        ])
+    def write_combo_section(ws, title, example, counter, start_row):
+        """Write a combo section: title, header, data rows, total, blank line."""
+        ws.append([title, None, example])
+        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=3)
+        ws.cell(start_row, 1).font = Font(bold=True, size=13)
+        ws.append(["Combinaison", "Nb produits", "% du total", None, "Volume", "KD", "Potentiel trafic", "CPC (€)"])
+        style_header(ws, 8, row=start_row + 1)
+        combos_sorted = counter.most_common()
+        max_c = combos_sorted[0][1] if combos_sorted else 1
+        for combo, count in combos_sorted:
+            bar = make_bar(count, max_c)
+            vd = vol_index.get(combo.lower(), {})
+            ws.append([
+                combo, count, f"{count/total*100:.1f}%", bar,
+                vd.get("volume", ""), vd.get("kd", ""),
+                vd.get("tp", ""), vd.get("cpc", ""),
+            ])
+        ws.append([f"Total combinaisons uniques : {len(combos_sorted)}"])
+        ws.append([])  # blank line
+        return start_row + len(combos_sorted) + 4  # title + header + data + total + blank
+
+    current_row = 1
+    if results["combos_type_mat"]:
+        current_row = write_combo_section(ws9, "🧵 Type + Matière", "Ex: chemise coton, pull laine...",
+                                           results["combos_type_mat"], current_row)
+    if results["combos_type_col"]:
+        current_row = write_combo_section(ws9, "🎨 Type + Couleur", "Ex: chemise bleu, pantalon beige...",
+                                           results["combos_type_col"], current_row)
+    if results["combos_type_coupe"]:
+        current_row = write_combo_section(ws9, "📐 Type + Coupe", "Ex: chemise slim, pantalon ajustée...",
+                                           results["combos_type_coupe"], current_row)
+    if results.get("combos_type_coll"):
+        current_row = write_combo_section(ws9, "📁 Type + Collection", "Ex: chemise casual, pull mailles...",
+                                           results["combos_type_coll"], current_row)
+    if results.get("combos_mat_col"):
+        current_row = write_combo_section(ws9, "🔗 Type + Matière + Couleur", "Ex: chemise coton bleu...",
+                                           results["combos_mat_col"], current_row)
 
     # 10. Requêtes vs Pages — matching ref format
     if df_matched is not None and not df_matched.empty:
         ws10 = wb.create_sheet("🔍 Requêtes vs Pages")
+        url_col_name = f"URL {store_name.capitalize()}" if store_name else "URL"
         cols_export = ["Mot-clé", "Nb produits", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
-                        "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
+                        "Correspondance", url_col_name, "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
+        # Map for data extraction (use "URL" from dataframe)
+        cols_data = ["Mot-clé", "Nb produits", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+                      "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
 
         for _, row in df_matched.iterrows():
-            ws10.append([row.get(c, "") for c in cols_export])
+            ws10.append([row.get(c, "") for c in cols_data])
 
         # Color correspondance column
         corresp_colors = {
