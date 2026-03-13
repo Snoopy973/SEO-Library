@@ -525,8 +525,15 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df["_vol_sort"] = pd.to_numeric(df["Volume"], errors="coerce").fillna(-1)
-        df = df.sort_values("_vol_sort", ascending=False).drop(columns="_vol_sort")
+        # Compute priority score: normalized volume x normalized nb_produits
+        vol_num = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
+        prod_num = pd.to_numeric(df["Nb produits"], errors="coerce").fillna(0)
+        max_vol = vol_num.max() if vol_num.max() > 0 else 1
+        max_prod = prod_num.max() if prod_num.max() > 0 else 1
+        # Score = 60% volume + 40% produits (volume pèse plus car c'est la demande)
+        score = ((vol_num / max_vol) * 60 + (prod_num / max_prod) * 40).round(0).astype(int)
+        df["Score priorité"] = score
+        df = df.sort_values("Score priorité", ascending=False)
     return df
 
 
@@ -730,10 +737,10 @@ def build_excel(results, df_matched, store_name):
     if df_matched is not None and not df_matched.empty:
         ws10 = wb.create_sheet("🔍 Requêtes vs Pages")
         url_col_name = f"URL {store_name.capitalize()}" if store_name else "URL"
-        cols_export = ["Mot-clé", "Nb produits", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+        cols_export = ["Mot-clé", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                         "Correspondance", url_col_name, "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         # Map for data extraction (use "URL" from dataframe)
-        cols_data = ["Mot-clé", "Nb produits", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+        cols_data = ["Mot-clé", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                       "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
@@ -749,6 +756,7 @@ def build_excel(results, df_matched, store_name):
         }
         corresp_col_idx = cols_export.index("Correspondance") + 1
         action_col_idx = cols_export.index("Action recommandée") + 1
+        score_col_idx = cols_export.index("Score priorité") + 1
         for row_idx in range(2, ws10.max_row + 1):
             cell = ws10.cell(row=row_idx, column=corresp_col_idx)
             color = corresp_colors.get(str(cell.value), "FFFFFF")
@@ -765,6 +773,22 @@ def build_excel(results, df_matched, store_name):
                 action_cell.fill = PatternFill(start_color=ac, end_color=ac, fill_type="solid")
                 if ac in ("E74C3C", "27AE60"):
                     action_cell.font = Font(color="FFFFFF", bold=True)
+
+            # Color score column (gradient: red < 30, orange 30-60, green > 60)
+            score_cell = ws10.cell(row=row_idx, column=score_col_idx)
+            try:
+                sv = int(float(str(score_cell.value or 0)))
+            except (ValueError, TypeError):
+                sv = 0
+            if sv >= 60:
+                score_cell.fill = PatternFill(start_color="27AE60", end_color="27AE60", fill_type="solid")
+                score_cell.font = Font(color="FFFFFF", bold=True)
+            elif sv >= 30:
+                score_cell.fill = PatternFill(start_color="F1C40F", end_color="F1C40F", fill_type="solid")
+                score_cell.font = Font(bold=True)
+            elif sv > 0:
+                score_cell.fill = PatternFill(start_color="E67E22", end_color="E67E22", fill_type="solid")
+                score_cell.font = Font(color="FFFFFF")
 
     wb.save(buffer)
     return buffer.getvalue()
