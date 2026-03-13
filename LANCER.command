@@ -66,23 +66,26 @@ APPLESCRIPT
 [ "$CHOICE" = "cancel" ] && exit 0
 
 # ── Lire la config de l'app choisie ──
-APP_CONFIG=$(python3 -c "
-import json
-with open('$CONFIG') as f:
+export USER_CHOICE="$CHOICE"
+export CONFIG_PATH="$CONFIG"
+APP_CONFIG=$(python3 << 'PYCONFIG'
+import json, os
+choice = os.environ["USER_CHOICE"]
+config_path = os.environ.get("CONFIG_PATH", "")
+with open(config_path) as f:
     data = json.load(f)
-for app in data['apps']:
-    if app['name'] == '''$CHOICE''':
-        print(app['type'])
-        print(app.get('path', ''))
-        print(app.get('port', ''))
-        print(app.get('prompt', ''))
-        break
-elif '''$CHOICE'''.startswith('⚙️'):
-    print('all')
-    print('')
-    print('')
-    print('')
-")
+if choice.startswith("\u2699"):
+    print("all\n\n\n")
+else:
+    for app in data["apps"]:
+        if app["name"] == choice:
+            print(app["type"])
+            print(app.get("path", ""))
+            print(app.get("port", ""))
+            print(app.get("prompt", ""))
+            break
+PYCONFIG
+)
 
 APP_TYPE=$(echo "$APP_CONFIG" | sed -n '1p')
 APP_PATH=$(echo "$APP_CONFIG" | sed -n '2p')
