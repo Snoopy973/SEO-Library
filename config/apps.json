@@ -17,6 +17,14 @@
       "type": "cli_interactive",
       "path": "tools/shopify-scraper/shopify_scraper.py",
       "prompt": "URL du site à analyser"
+    },
+    {
+      "id": "mapping-points-chauds",
+      "name": "🗺️ Mapping des Points Chauds",
+      "description": "Tutoriel et outils pour cartographier les points chauds SEO d'un site",
+      "type": "streamlit",
+      "path": "tools/mapping-points-chauds/app.py",
+      "port": 8502
     }
   ],
   "dependencies": [
@@ -24,6 +32,10 @@
     "pandas",
     "plotly",
     "openpyxl",
-    "requests"
+    "requests",
+    "gspread",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-api-python-client"
   ]
 }

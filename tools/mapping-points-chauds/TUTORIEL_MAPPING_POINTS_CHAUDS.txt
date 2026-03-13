@@ -1,0 +1,361 @@
+================================================================================
+       MAPPING DES POINTS CHAUDS (MDPC) — TUTORIEL COMPLET
+       Hotspot Mapper : identifier les pages a fort potentiel SEO
+================================================================================
+
+
+OBJECTIF :
+Identifier les pages dont les balises (Title, H1, Meta Description) sont
+sous-optimisees par rapport a leur potentiel de trafic organique.
+L'outil automatise tout le processus qui etait fait manuellement dans Excel.
+
+
+================================================================================
+PHASE 1 — PREPARATION DES FICHIERS (avant d'ouvrir l'outil)
+================================================================================
+
+
+--- FICHIER 1 : Export Screaming Frog (internal_html.csv) ---
+
+   COMMENT L'OBTENIR :
+   1. Ouvrir Screaming Frog
+   2. IMPORTANT : Connecter l'API Google Search Console AVANT le crawl
+      > Configuration > API Access > Google Search Console
+      > Programmer la plage de dates sur 4 a 6 mois avant l'extraction
+      > Cela permet de recuperer les clics et impressions par page
+   3. Lancer le crawl du site
+   4. Aller dans : Internal > HTML
+   5. Exporter en CSV : Export > internal_html.csv
+
+   CE QUE CE FICHIER CONTIENT :
+   - Toutes les URLs du site (pages internes HTML)
+   - Balises actuelles : Title 1, H1-1, Meta Description 1
+   - Longueur de chaque balise
+   - Code HTTP, Indexabilite
+   - Donnees GSC (si API connectee) : Clics, Impressions, CTR
+
+   DANS L'OUTIL : Upload dans la sidebar > "Screaming Frog — internal_html"
+
+   ANCIENNEMENT A LA MAIN :
+   Tu importais ce fichier dans Excel, tu copiais-collais les pages et
+   balises, puis tu dupliquais 3 fois l'onglet pour etudier chaque balise
+   separement. L'outil fait tout ca automatiquement en 3 onglets
+   (MDPC Title / MDPC H1 / MDPC Meta Description).
+
+
+--- FICHIER 2 : Consolidation GSC (.xlsx ou .csv) ---
+
+   COMMENT L'OBTENIR :
+   1. Extraire les donnees GSC (via Google Search Console, Screaming Frog,
+      ou un outil d'extraction GSC)
+   2. Consolider les mots-cles par URL dans un fichier unique :
+      - Colonne "Page" ou "URL" : l'adresse de la page
+      - Colonne "Mots cles" : tous les mots-cles GSC associes
+        (separes par des retours a la ligne \n dans la cellule)
+
+   CE QUE CE FICHIER CONTIENT :
+   - Chaque URL avec TOUS ses mots-cles GSC
+   - Permet d'identifier les "meilleurs mots-cles" pour chaque page
+   - L'outil extrait automatiquement les top mots-cles par URL
+
+   DANS L'OUTIL : Upload dans la sidebar > "Consolidation donnees GSC"
+
+   ANCIENNEMENT A LA MAIN :
+   Tu faisais une extraction GSC, puis une consolidation GSC, puis des
+   RECHERCHEV pour trouver les meilleurs mots-cles par page.
+   L'outil fait la fusion et la consolidation automatiquement.
+
+
+================================================================================
+PHASE 1 — UTILISATION DE L'OUTIL (Hotspot Mapper dans Streamlit)
+================================================================================
+
+
+ETAPE 1 : Lancer l'outil
+   > Terminal : streamlit run seo_tools.py
+   > Ouvrir http://localhost:8501
+   > Cliquer sur "Hotspot Mapper" dans la sidebar gauche
+
+   Si aucun fichier n'est uploade, un mode d'emploi resume s'affiche
+   dans la zone principale.
+
+
+ETAPE 2 : Uploader les 2 fichiers (sidebar gauche)
+
+   Section "1. Screaming Frog — internal_html" :
+   - Glisser ou selectionner le fichier internal_html.csv
+   - Si le fichier est accepte : "SF : X URLs" s'affiche en vert
+
+   Section "2. Consolidation donnees GSC" :
+   - Glisser ou selectionner le fichier de consolidation (.xlsx ou .csv)
+   - Si le fichier est accepte : "GSC : X URLs" s'affiche en vert
+
+   NOTE : Si un seul des deux fichiers est uploade, l'outil affiche un
+   apercu du fichier et demande d'uploader l'autre. Les deux fichiers
+   sont necessaires pour lancer la fusion.
+
+
+ETAPE 3 : Configurer les filtres (sidebar gauche)
+
+   Section "Filtres" :
+
+   - "Filtrer par langue (segment URL)" :
+     Multi-selection parmi /fr/, /en/, /es/, /de/, /it/
+     Utile pour les sites multilingues — ne garde que les URLs
+     contenant le segment selectionne.
+     Laisser vide = toutes les langues.
+
+   - "Pages indexables uniquement" (coche, active par defaut) :
+     Ne garde que les pages marquees "Indexable" par Screaming Frog.
+     Recommande : laisser active.
+
+   - "Code HTTP 200 uniquement" (coche, active par defaut) :
+     Exclut les redirections (301/302), erreurs (404/500), etc.
+     Recommande : laisser active.
+
+   - "Impressions minimum" (champ numerique, defaut 0) :
+     Fixe un seuil minimum d'impressions GSC. Les pages en dessous
+     sont exclues. Ajuster selon la taille du site :
+     > Gros site (>5000 pages) : 50-100
+     > Petit site (<500 pages) : 0-10
+
+   - "Clics minimum" (champ numerique, defaut 0) :
+     Meme principe pour les clics.
+
+   Section "Mots-cles marque" :
+
+   - "Regex mots-cles a exclure" (champ texte) :
+     Regex insensible a la casse pour retirer les mots-cles de marque
+     de la colonne "Meilleurs mots-cles GSC".
+     Ex: "monsite|ma-marque" retire tout mot-cle contenant
+     "monsite" ou "ma-marque".
+     Si la regex est valide, un message vert le confirme.
+     Si elle est invalide, un message rouge apparait.
+
+
+ETAPE 4 : Lecture des resultats
+
+   Des que les 2 fichiers sont uploades et les filtres configures,
+   l'outil fusionne automatiquement les donnees et affiche :
+
+   a) VUE D'ENSEMBLE (en haut)
+      3 cartes metriques cote a cote :
+      - MDPC Title : X points chauds / Y URLs
+      - MDPC H1 : X points chauds / Y URLs
+      - MDPC Meta Description : X points chauds / Y URLs
+      "Points chauds" = pages classees "Chaud" ou "Tiede".
+
+   b) 3 ONGLETS PRINCIPAUX
+      Cliquer sur l'onglet voulu :
+      - "MDPC Title" : analyse des balises title
+      - "MDPC H1" : analyse des balises H1
+      - "MDPC Meta Description" : analyse des meta descriptions
+
+   c) DANS CHAQUE ONGLET — BANDEAU DE METRIQUES (6 compteurs)
+      - URLs : nombre total de pages dans l'onglet
+      - Chaud : pages >= 500 impressions ET CTR < 2% (fond rouge)
+      - Tiede : pages >= 100 impressions ET CTR < 3% (fond orange)
+      - A surveiller : pages >= 20 impressions ET CTR < 5% (fond jaune)
+      - Clics : total des clics de toutes les pages
+      - Impressions : total des impressions de toutes les pages
+      + une ligne indiquant combien d'URLs ont ete matchees avec GSC
+        et combien n'ont pas de mots-cles GSC.
+
+   d) DANS CHAQUE ONGLET — 4 SOUS-ONGLETS
+
+      "Points Chauds" :
+         Tableau filtrant uniquement les pages "Chaud" et "Tiede",
+         triees par Score Chaleur decroissant.
+         Ce sont les pages a traiter en priorite.
+
+      "Tableau complet" :
+         Toutes les pages, avec un filtre par statut
+         (multi-selection : Chaud / Tiede / A surveiller / OK).
+         Permet de parcourir l'ensemble des donnees.
+
+      "Statistiques" :
+         - Graphique en barres : repartition des statuts
+         - Graphique en barres : distribution des CTR par tranche
+           (0-1%, 1-2%, 2-3%, 3-5%, 5-10%, 10%+)
+         - Tableau : Top 10 pages par impressions ayant un CTR < 5%
+
+      "Recherche" :
+         Champ de recherche libre pour trouver une page par URL,
+         mot-cle, ou contenu de balise. Affiche le nombre de
+         resultats et le tableau filtre.
+
+   e) COLONNES AFFICHEES DANS LES TABLEAUX
+      - Statut : emoji + categorie (Chaud / Tiede / A surveiller / OK)
+      - URL : adresse de la page
+      - Type : vide (a remplir manuellement)
+      - Language : langue detectee ou vide
+      - Clics : nombre de clics GSC
+      - Impressions : nombre d'impressions GSC
+      - CTR : taux de clic en % (Clics / Impressions x 100)
+      - Mot-cle selectionne : pre-rempli avec le 1er mot-cle GSC
+      - Meilleurs mots-cles GSC : les 3 premiers mots-cles affiches,
+        avec "(+N)" si la page en a davantage
+      - Balise actuelle : Title 1 / H1-1 / Meta Description 1
+        (selon l'onglet)
+      - Longueur balise : nombre de caracteres de la balise actuelle
+      - Commentaire : vide (a remplir)
+
+
+ETAPE 5 : Exporter les resultats (bas de page)
+
+   3 boutons d'export cote a cote :
+
+   - "Excel complet (3 feuilles)" (bouton principal bleu) :
+     1 fichier .xlsx avec 3 onglets (Title, H1, Meta Description).
+     C'est l'export recommande pour passer a la Phase 2.
+
+   - "Excel Title seul" :
+     1 fichier .xlsx avec uniquement l'onglet Title.
+
+   - "CSV (Title)" :
+     Export CSV rapide de l'onglet Title uniquement.
+
+   Le fichier Excel exporte contient des colonnes supplementaires
+   (absentes de l'affichage Streamlit) pretes pour la Phase 2 :
+   - "Positions" : vide, a remplir via AppScript DataForSEO
+   - "Balise proposee" : vide, pour rediger la nouvelle balise
+   - "Longueur proposee" : vide, se calcule apres saisie
+   - "Indexabilite" et "Code HTTP" : pour reference
+
+
+ETAPE 6 : Export Google Sheets (optionnel)
+
+   Cette option n'apparait que si le fichier credentials.json est
+   present dans le dossier de l'outil. Sinon le message
+   "credentials.json introuvable" s'affiche dans la sidebar.
+
+   Si present :
+   - Un bouton "Mettre a jour mon Google Sheet" apparait en bas
+   - Cliquer dessus : les 3 feuilles MDPC + un onglet Config
+     sont pushees automatiquement dans le Google Sheet
+   - L'onglet Config contient les parametres DataForSEO pre-remplis
+     (pays, langue, device, domaine cible)
+   - Un lien vers le Google Sheet s'affiche une fois termine
+   - Le Google Sheet est pret pour la Phase 2 (AppScript)
+
+
+================================================================================
+PHASE 2 — POSITIONS SERP VIA APPSCRIPT (dans Google Sheets)
+================================================================================
+
+   FICHIER NECESSAIRE : appscript_dataforseo.txt (ou .gs)
+
+   Cette phase permet de verifier la position reelle de chaque page sur
+   son meilleur mot-cle. C'est indispensable pour decider si une page
+   doit etre optimisee ou non.
+
+
+ETAPE 7 : Installer l'AppScript
+   1. Ouvrir le Google Sheet exporte (ou mis a jour via l'outil)
+   2. Extensions > Apps Script
+   3. Copier-coller le contenu de appscript_dataforseo.txt
+   4. Les credentials DataForSEO sont deja remplis dans le script :
+      - Login : emmanueldevauxmoret@uplix.fr
+      - Password : f244914bbe211a9d
+   5. Sauvegarder (Ctrl+S)
+   6. Recharger la page du Google Sheet
+   7. Un nouveau menu "DataForSEO" apparait dans la barre de menu
+
+
+ETAPE 8 : Configurer la recuperation
+   - Menu DataForSEO > "Initialiser la config"
+   - L'onglet "Config" se cree avec les parametres :
+     > pays : fr (code pays pour la SERP)
+     > langue_serp : fr (langue des resultats)
+     > device : desktop (ou mobile)
+     > domaine_cible : tonsite.com (le domaine a chercher dans la SERP)
+
+
+ETAPE 9 : Recuperer les positions
+   - Menu DataForSEO > "Recuperer les positions (toutes les feuilles MDPC)"
+   - Le script interroge l'API DataForSEO pour chaque mot-cle
+   - Il remplit automatiquement la colonne "Positions" (colonne G)
+   - "NF" = Not Found (la page n'est pas dans le top 30)
+
+   Le script fait :
+   - 1 appel API par mot-cle unique (avec cache pour eviter les doublons)
+   - Pause de 2s entre chaque appel (respect du rate limiting)
+   - Correspondance exacte URL puis correspondance souple (meme domaine + chemin)
+   - Ecriture en batch a la fin (performance)
+
+
+================================================================================
+PHASE 3 — ANALYSE ET DECISIONS (travail manuel)
+================================================================================
+
+
+ETAPE 10 : Selectionner le meilleur mot-cle
+   Pour chaque page, dans la colonne "Mot-cle selectionne" :
+   - Choisir le mot-cle le plus pertinent parmi les "Meilleurs mots-cles GSC"
+   - Le mot-cle doit correspondre a l'intention de recherche de la page
+   - Verifier que c'est bien un mot-cle generique (pas de marque)
+
+
+ETAPE 11 : Analyser les positions pour decider
+   Regles de decision :
+
+   POSITION    | ACTION                           | RAISON
+   ------------|----------------------------------|---------------------------
+   Top 3       | NE PAS TOUCHER                   | Deja bien positionne
+   4 a 5       | Optimisation legere              | Petit ajustement possible
+   > 5         | POTENTIEL - A optimiser           | Fort potentiel de gain
+   NF          | Page non positionnee              | Revoir la strategie
+
+   CAS PARTICULIER "MAUVAIS TITLE" :
+   - La page fait du trafic (clics >30)
+   - Le meilleur mot-cle n'est PAS dans le title actuel
+   - Position > 5
+   = Priorite absolue d'optimisation
+
+
+ETAPE 12 : Proposer les nouvelles balises
+   Dans les colonnes "Balise proposee" :
+   - Rediger le nouveau Title / H1 / Meta Description
+   - Inclure le mot-cle selectionne naturellement
+   - Respecter les longueurs recommandees :
+     > Title : 50-60 caracteres
+     > H1 : pas de limite stricte, mais concis
+     > Meta Description : 150-160 caracteres
+
+
+================================================================================
+RECAPITULATIF DES FICHIERS
+================================================================================
+
+FICHIER                         | ETAPE | ROLE
+--------------------------------|-------|------------------------------------------
+internal_html.csv               |  1-2  | Export Screaming Frog : URLs + balises
+  (Screaming Frog)              |       | actuelles
+                                |       |
+Consolidation GSC (.xlsx/.csv)  |  2    | Mots-cles GSC par URL, consolides
+                                |       | pour identifier les meilleurs mots-cles
+                                |       |
+credentials.json                |  6bis | Authentification Google (compte de
+  (Google Cloud)                |       | service) pour push vers Google Sheets
+                                |       |
+appscript_dataforseo.txt        |  7    | Script Google Apps Script a coller dans
+                                |       | le Google Sheet pour recuperer les
+                                |       | positions SERP via l'API DataForSEO
+                                |       |
+MDPC_mapping_complet_*.xlsx     |  6    | Fichier de sortie genere par l'outil,
+  (genere par l'outil)          |       | avec 3 onglets (Title, H1, Meta Desc.)
+                                |       | + colonnes vides pour Phase 2
+
+
+================================================================================
+OUTILS UTILISES
+================================================================================
+
+- Screaming Frog : Crawl du site + extraction balises + connexion API GSC
+- Google Search Console : Source des mots-cles, clics, impressions
+- Hotspot Mapper (Streamlit) : Fusion automatique + scoring + export
+- Google Sheets + AppScript : Phase 2 - positions SERP via DataForSEO
+- DataForSEO API : Recuperation des positions reelles sur Google
+
+
+================================================================================
