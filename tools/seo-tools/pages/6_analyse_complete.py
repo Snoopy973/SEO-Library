@@ -388,7 +388,7 @@ def detect_ahrefs_type(df):
 # MATCHING KEYWORDS VS PAGES
 # ═════════════════════════════════════════════
 
-def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials):
+def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_type_mat=None):
     rows = []
 
     # Build page index by top keyword AND by URL slugs
@@ -497,8 +497,10 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials):
             else:
                 action = "Améliorer"
 
+        nb_produits = combos_type_mat.get(combo_lower, 0) if combos_type_mat else 0
         rows.append({
             "Mot-clé": combo_kw,
+            "Nb produits": nb_produits if nb_produits else None,
             "Volume": volume,
             "Position top KW": position if position else None,
             "KD": kd,
@@ -699,7 +701,7 @@ def build_excel(results, df_matched, store_name):
     # 10. Requêtes vs Pages — matching ref format
     if df_matched is not None and not df_matched.empty:
         ws10 = wb.create_sheet("🔍 Requêtes vs Pages")
-        cols_export = ["Mot-clé", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+        cols_export = ["Mot-clé", "Nb produits", "Volume", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                         "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
@@ -844,7 +846,12 @@ if not combos_with_materials and df_keywords is not None:
         combos_with_materials[kw] = []
 
 if has_ahrefs and combos_with_materials:
-    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials)
+    combos_count = Counter()
+    if has_products:
+        combos_count.update(results.get("combos_type_mat", {}))
+        combos_count.update(results.get("combos_type_col", {}))
+        combos_count.update(results.get("combos_type_coupe", {}))
+    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_count)
 
 
 # ── TABS ──
