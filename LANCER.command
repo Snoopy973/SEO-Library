@@ -1,21 +1,45 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════
-# SEO Library Launcher
-# Lit apps.json et propose les outils disponibles
+# SEO Library — Lancer en un clic
+# Double-clic sur ce fichier pour ouvrir la bibliothèque
 # ═══════════════════════════════════════════════
 
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
-
-# Trouver le dossier de la library (là où est ce script)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="$SCRIPT_DIR/config/apps.json"
 
-if [ ! -f "$CONFIG" ]; then
-    osascript -e 'display alert "Erreur" message "Fichier config/apps.json introuvable" as critical'
+# ── Vérifier Python 3 ──
+if ! command -v python3 &>/dev/null; then
+    osascript -e 'display alert "Python 3 requis" message "Télécharge Python depuis python.org/downloads" as critical'
     exit 1
 fi
 
-# Lire les apps depuis apps.json via Python
+# ── Auto-install des dépendances au premier lancement ──
+MARKER="$SCRIPT_DIR/.installed"
+if [ ! -f "$MARKER" ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════╗"
+    echo "║  Premier lancement — installation...     ║"
+    echo "╚══════════════════════════════════════════╝"
+    echo ""
+    DEPS=$(python3 -c "
+import json
+with open('$CONFIG') as f:
+    data = json.load(f)
+print(' '.join(data.get('dependencies', [])))
+")
+    for dep in $DEPS; do
+        if ! python3 -c "import $dep" 2>/dev/null; then
+            echo "  📥 Installation de $dep..."
+            pip3 install "$dep" --quiet
+        fi
+    done
+    touch "$MARKER"
+    echo "  ✅ Installation terminée !"
+    echo ""
+fi
+
+# ── Lire les apps depuis apps.json ──
 APPS_LIST=$(python3 -c "
 import json
 with open('$CONFIG') as f:
@@ -25,25 +49,23 @@ for app in data['apps']:
 print('⚙️ Tout lancer')
 ")
 
-# Convertir en liste AppleScript
 AS_LIST=$(echo "$APPS_LIST" | python3 -c "
 import sys
 items = [l.strip() for l in sys.stdin if l.strip()]
 print('{' + ', '.join(['\"' + i + '\"' for i in items]) + '}')
 ")
 
-# Afficher le menu
-CHOICE=$(osascript -e "
-tell application \"System Events\"
-    set choix to choose from list $AS_LIST with title \"SEO Library\" with prompt \"Quel outil lancer ?\" default items {item 1 of $AS_LIST}
-    if choix is false then return \"cancel\"
-    return item 1 of choix
-end tell
-")
+# ── Afficher le menu ──
+CHOICE=$(osascript << APPLESCRIPT
+set choix to choose from list $AS_LIST with title "SEO Library" with prompt "Quel outil lancer ?" default items {item 1 of $AS_LIST}
+if choix is false then return "cancel"
+return item 1 of choix
+APPLESCRIPT
+)
 
 [ "$CHOICE" = "cancel" ] && exit 0
 
-# Lire la config de l'app choisie
+# ── Lire la config de l'app choisie ──
 APP_CONFIG=$(python3 -c "
 import json
 with open('$CONFIG') as f:
@@ -71,8 +93,10 @@ launch_streamlit() {
     local path="$1"
     local port="$2"
     cd "$SCRIPT_DIR/$(dirname "$path")"
+    streamlit run "$(basename "$path")" --server.port "$port" --server.headless true &
+    sleep 2
     open "http://localhost:$port"
-    streamlit run "$(basename "$path")" --server.port "$port" --server.headless true
+    wait
 }
 
 launch_cli() {
@@ -97,13 +121,12 @@ case "$APP_TYPE" in
         launch_cli "$APP_PATH" "$APP_PROMPT"
         ;;
     all)
-        # Lancer toutes les apps
         python3 -c "
 import json
 with open('$CONFIG') as f:
     data = json.load(f)
 for app in data['apps']:
-    print(app['type'] + '|' + app.get('path','') + '|' + app.get('port','') + '|' + app.get('prompt',''))
+    print(app['type'] + '|' + app.get('path','') + '|' + str(app.get('port','')) + '|' + app.get('prompt',''))
 " | while IFS='|' read -r type path port prompt; do
             case "$type" in
                 streamlit)
