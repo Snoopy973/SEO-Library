@@ -1,0 +1,29 @@
+{
+  "library_name": "SEO Library",
+  "version": "1.0",
+  "apps": [
+    {
+      "id": "seo-dashboard",
+      "name": "🔍 Dashboard SEO (Streamlit)",
+      "description": "Ré-optimisation, Title Optimizer, SERP Analyzer, Scraper Produits, Positions & Opportunités",
+      "type": "streamlit",
+      "path": "tools/seo-tools/app.py",
+      "port": 8501
+    },
+    {
+      "id": "shopify-scraper",
+      "name": "🛒 Scraper Shopify/WooCommerce",
+      "description": "Scrape un site e-commerce et génère un Excel d'analyse par matière, couleur, coupe...",
+      "type": "cli_interactive",
+      "path": "tools/shopify-scraper/shopify_scraper.py",
+      "prompt": "URL du site à analyser"
+    }
+  ],
+  "dependencies": [
+    "streamlit",
+    "pandas",
+    "plotly",
+    "openpyxl",
+    "requests"
+  ]
+}
