@@ -1124,11 +1124,11 @@ if has_ahrefs:
             df_matched["_type"] = df_matched["Mot-clé"].apply(lambda x: str(x).split()[0].capitalize() if x else "")
             all_types = sorted(df_matched["_type"].unique())
             all_materials = sorted(set(m for mats in combos_with_materials.values() for m in mats if m))
-            allType combinaisons = sorted(df_matched["Type combinaison"].unique())
+            all_combo_cats = sorted(df_matched["Type combinaison"].unique())
 
             fc0, fc1, fc2, fc3, fc4 = st.columns(5)
             with fc0:
-                selType combinaison = st.multiselect("🏷️ Combinaison", options=allType combinaisons, default=[])
+                sel_combo_cat = st.multiselect("🏷️ Combinaison", options=all_combo_cats, default=[])
             with fc1:
                 sel_type = st.multiselect("📦 Type", options=all_types, default=[])
             with fc2:
@@ -1140,8 +1140,8 @@ if has_ahrefs:
                 vol_min = st.number_input("🔢 Volume min", min_value=0, value=0, step=100)
 
             df_display = df_matched.copy()
-            if selType combinaison:
-                df_display = df_display[df_display["Type combinaison"].isin(selType combinaison)]
+            if sel_combo_cat:
+                df_display = df_display[df_display["Type combinaison"].isin(sel_combo_cat)]
             if sel_type:
                 df_display = df_display[df_display["_type"].isin(sel_type)]
             if sel_mat:
