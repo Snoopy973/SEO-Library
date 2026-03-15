@@ -505,7 +505,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             else:
                 action = "Améliorer"
 
-        # Lookup nb produits in the correct counter based on combo category
+        # Lookup nb produits in the SPECIFIC counter for this combo's category
         nb_produits = 0
         if combos_counters and combos_category:
             cat = combos_category.get(combo_kw, "")
@@ -534,7 +534,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             "Nb KW page": nb_kw_page if nb_kw_page else None,
             "Action recommandée": action,
             "_matiere": ", ".join(materials) if materials else "",
-            "_combo_cat": combos_category.get(combo_kw, "Autre") if combos_category else "Autre",
+            "Type combinaison": combos_category.get(combo_kw, "Autre") if combos_category else "Autre",
         })
 
     df = pd.DataFrame(rows)
@@ -756,7 +756,7 @@ def build_excel(results, df_matched, store_name):
         cols_export = ["Mot-clé", "Type combinaison", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                         "Correspondance", url_col_name, "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         # Map for data extraction (use "URL" from dataframe)
-        cols_data = ["Mot-clé", "_combo_cat", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+        cols_data = ["Mot-clé", "Type combinaison", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                       "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
@@ -812,10 +812,12 @@ def build_excel(results, df_matched, store_name):
             for r in range(1, min(sheet.max_row + 1, 500)):
                 val = sheet.cell(row=r, column=c).value
                 if val is not None:
-                    v = len(str(val))
+                    s = str(val)
+                    # Emoji/unicode chars take ~2 char widths in Excel
+                    v = sum(2 if ord(ch) > 0xFFFF else 1 for ch in s)
                     if v > best:
                         best = v
-            sheet.column_dimensions[get_column_letter(c)].width = min(max(best + 3, 10), 60)
+            sheet.column_dimensions[get_column_letter(c)].width = min(max(best + 4, 12), 65)
 
     wb.save(buffer)
     return buffer.getvalue()
@@ -1122,11 +1124,11 @@ if has_ahrefs:
             df_matched["_type"] = df_matched["Mot-clé"].apply(lambda x: str(x).split()[0].capitalize() if x else "")
             all_types = sorted(df_matched["_type"].unique())
             all_materials = sorted(set(m for mats in combos_with_materials.values() for m in mats if m))
-            all_combo_cats = sorted(df_matched["_combo_cat"].unique())
+            allType combinaisons = sorted(df_matched["Type combinaison"].unique())
 
             fc0, fc1, fc2, fc3, fc4 = st.columns(5)
             with fc0:
-                sel_combo_cat = st.multiselect("🏷️ Combinaison", options=all_combo_cats, default=[])
+                selType combinaison = st.multiselect("🏷️ Combinaison", options=allType combinaisons, default=[])
             with fc1:
                 sel_type = st.multiselect("📦 Type", options=all_types, default=[])
             with fc2:
@@ -1138,8 +1140,8 @@ if has_ahrefs:
                 vol_min = st.number_input("🔢 Volume min", min_value=0, value=0, step=100)
 
             df_display = df_matched.copy()
-            if sel_combo_cat:
-                df_display = df_display[df_display["_combo_cat"].isin(sel_combo_cat)]
+            if selType combinaison:
+                df_display = df_display[df_display["Type combinaison"].isin(selType combinaison)]
             if sel_type:
                 df_display = df_display[df_display["_type"].isin(sel_type)]
             if sel_mat:
