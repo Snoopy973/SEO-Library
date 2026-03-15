@@ -396,7 +396,7 @@ def detect_ahrefs_type(df):
 # MATCHING KEYWORDS VS PAGES
 # ═════════════════════════════════════════════
 
-def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_type_mat=None):
+def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None):
     rows = []
 
     # Build page index by top keyword AND by URL slugs
@@ -505,7 +505,20 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             else:
                 action = "Améliorer"
 
-        nb_produits = combos_type_mat.get(combo_lower, 0) if combos_type_mat else 0
+        # Lookup nb produits in the correct counter based on combo category
+        nb_produits = 0
+        if combos_counters and combos_category:
+            cat = combos_category.get(combo_kw, "")
+            if cat == "Type + Matière":
+                nb_produits = combos_counters.get("type_mat", {}).get(combo_lower, 0)
+            elif cat == "Type + Couleur":
+                nb_produits = combos_counters.get("type_col", {}).get(combo_lower, 0)
+            elif cat == "Type + Coupe":
+                nb_produits = combos_counters.get("type_coupe", {}).get(combo_lower, 0)
+            elif cat == "Type + Collection":
+                nb_produits = combos_counters.get("type_coll", {}).get(combo_lower, 0)
+            elif cat == "Type + Matière + Couleur":
+                nb_produits = combos_counters.get("mat_col", {}).get(combo_lower, 0)
         rows.append({
             "Mot-clé": combo_kw,
             "Nb produits": nb_produits if nb_produits else None,
@@ -521,17 +534,20 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             "Nb KW page": nb_kw_page if nb_kw_page else None,
             "Action recommandée": action,
             "_matiere": ", ".join(materials) if materials else "",
+            "_combo_cat": combos_category.get(combo_kw, "Autre") if combos_category else "Autre",
         })
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        # Compute priority score: normalized volume x normalized nb_produits
         vol_num = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
         prod_num = pd.to_numeric(df["Nb produits"], errors="coerce").fillna(0)
+        kd_num = pd.to_numeric(df["KD"], errors="coerce").fillna(50)
         max_vol = vol_num.max() if vol_num.max() > 0 else 1
         max_prod = prod_num.max() if prod_num.max() > 0 else 1
-        # Score = 60% volume + 40% produits (volume pèse plus car c'est la demande)
-        score = ((vol_num / max_vol) * 60 + (prod_num / max_prod) * 40).round(0).astype(int)
+        # Score = 40% volume + 30% produits + 30% facilité (100 - KD)
+        # KD élevé = difficile = pénalité, KD bas = facile = bonus
+        facilite = (100 - kd_num) / 100
+        score = ((vol_num / max_vol) * 40 + (prod_num / max_prod) * 30 + facilite * 30).round(0).astype(int)
         df["Score priorité"] = score
         df = df.sort_values("Score priorité", ascending=False)
     return df
@@ -737,10 +753,10 @@ def build_excel(results, df_matched, store_name):
     if df_matched is not None and not df_matched.empty:
         ws10 = wb.create_sheet("🔍 Requêtes vs Pages")
         url_col_name = f"URL {store_name.capitalize()}" if store_name else "URL"
-        cols_export = ["Mot-clé", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+        cols_export = ["Mot-clé", "Type combinaison", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                         "Correspondance", url_col_name, "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         # Map for data extraction (use "URL" from dataframe)
-        cols_data = ["Mot-clé", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
+        cols_data = ["Mot-clé", "_combo_cat", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
                       "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
@@ -789,6 +805,17 @@ def build_excel(results, df_matched, store_name):
             elif sv > 0:
                 score_cell.fill = PatternFill(start_color="E67E22", end_color="E67E22", fill_type="solid")
                 score_cell.font = Font(color="FFFFFF")
+
+    for sheet in wb.worksheets:
+        for c in range(1, sheet.max_column + 1):
+            best = 0
+            for r in range(1, min(sheet.max_row + 1, 500)):
+                val = sheet.cell(row=r, column=c).value
+                if val is not None:
+                    v = len(str(val))
+                    if v > best:
+                        best = v
+            sheet.column_dimensions[get_column_letter(c)].width = min(max(best + 3, 10), 60)
 
     wb.save(buffer)
     return buffer.getvalue()
@@ -878,6 +905,7 @@ if not has_products and not has_ahrefs:
 
 df_matched = pd.DataFrame()
 combos_with_materials = {}
+combos_category = {}  # tracks which category each combo belongs to
 
 if has_products:
     results = st.session_state["ac_results"]
@@ -889,12 +917,15 @@ if has_products:
         if len(parts) >= 2:
             mat = " ".join(parts[1:]).capitalize()
             combos_with_materials[combo_key] = [mat]
+        combos_category[combo_key] = "Type + Matière"
     for combo_key in results.get("combos_type_col", {}):
         if combo_key not in combos_with_materials:
             combos_with_materials[combo_key] = []
+        combos_category[combo_key] = "Type + Couleur"
     for combo_key in results.get("combos_type_coupe", {}):
         if combo_key not in combos_with_materials:
             combos_with_materials[combo_key] = []
+        combos_category[combo_key] = "Type + Coupe"
 
 if not combos_with_materials and df_keywords is not None:
     for _, row in df_keywords.iterrows():
@@ -902,12 +933,16 @@ if not combos_with_materials and df_keywords is not None:
         combos_with_materials[kw] = []
 
 if has_ahrefs and combos_with_materials:
-    combos_count = Counter()
+    combos_counters = {}
     if has_products:
-        combos_count.update(results.get("combos_type_mat", {}))
-        combos_count.update(results.get("combos_type_col", {}))
-        combos_count.update(results.get("combos_type_coupe", {}))
-    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_count)
+        combos_counters = {
+            "type_mat": results.get("combos_type_mat", {}),
+            "type_col": results.get("combos_type_col", {}),
+            "type_coupe": results.get("combos_type_coupe", {}),
+            "type_coll": results.get("combos_type_coll", {}),
+            "mat_col": results.get("combos_mat_col", {}),
+        }
+    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters, combos_category)
 
 
 # ── TABS ──
@@ -1083,17 +1118,30 @@ if has_ahrefs:
             import plotly.express as px
 
             st.markdown("### 🎛️ Filtres")
-            fc1, fc2, fc3 = st.columns(3)
+            # Extract type from keyword (first word)
+            df_matched["_type"] = df_matched["Mot-clé"].apply(lambda x: str(x).split()[0].capitalize() if x else "")
+            all_types = sorted(df_matched["_type"].unique())
+            all_materials = sorted(set(m for mats in combos_with_materials.values() for m in mats if m))
+            all_combo_cats = sorted(df_matched["_combo_cat"].unique())
+
+            fc0, fc1, fc2, fc3, fc4 = st.columns(5)
+            with fc0:
+                sel_combo_cat = st.multiselect("🏷️ Combinaison", options=all_combo_cats, default=[])
             with fc1:
-                all_materials = sorted(set(m for mats in combos_with_materials.values() for m in mats if m))
-                sel_mat = st.multiselect("🧵 Matière", options=all_materials, default=[])
+                sel_type = st.multiselect("📦 Type", options=all_types, default=[])
             with fc2:
+                sel_mat = st.multiselect("🧵 Matière", options=all_materials, default=[])
+            with fc3:
                 all_corresp = sorted(df_matched["Correspondance"].unique())
                 sel_corresp = st.multiselect("📌 Correspondance", options=all_corresp, default=[])
-            with fc3:
+            with fc4:
                 vol_min = st.number_input("🔢 Volume min", min_value=0, value=0, step=100)
 
             df_display = df_matched.copy()
+            if sel_combo_cat:
+                df_display = df_display[df_display["_combo_cat"].isin(sel_combo_cat)]
+            if sel_type:
+                df_display = df_display[df_display["_type"].isin(sel_type)]
             if sel_mat:
                 df_display = df_display[df_display["_matiere"].apply(
                     lambda x: any(m.lower() in str(x).lower() for m in sel_mat))]
