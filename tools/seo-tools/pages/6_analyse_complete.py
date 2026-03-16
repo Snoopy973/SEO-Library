@@ -200,6 +200,10 @@ def parse_shopify_product(p, store_domain):
     if variants and variants[0].get("compare_at_price"):
         compare_price = float(variants[0]["compare_at_price"])
 
+    in_stock = any(v.get("available", False) for v in variants)
+    available_variants = sum(1 for v in variants if v.get("available", False))
+    total_variants = len(variants)
+
     return {
         "title": p.get("title", ""),
         "type": product_type,
@@ -223,6 +227,10 @@ def parse_shopify_product(p, store_domain):
         "compare_price": compare_price,
         "url": f"https://{store_domain}/products/{p.get('handle', '')}",
         "tags": tags,
+        "in_stock": in_stock,
+        "available_variants": available_variants,
+        "total_variants": total_variants,
+        "published_at": p.get("published_at"),
     }
 
 
@@ -300,11 +308,19 @@ def analyze_parsed_products(parsed_products):
         "combos_mat_col": Counter(),
         "taxonomy": defaultdict(set),
         "total": len(parsed_products),
+        "total_in_stock": 0,
+        "total_out_of_stock": 0,
     }
     for p in parsed_products:
         ptype = p["type"]
+        is_in_stock = p.get("in_stock", True)  # fallback True pour WooCommerce
         results["type_count"][ptype] += 1
         results["taxonomy"]["Type de produit"].add(ptype)
+
+        if is_in_stock:
+            results["total_in_stock"] += 1
+        else:
+            results["total_out_of_stock"] += 1
 
         for mat in p["materials"]:
             results["materials_count"][mat] += 1
@@ -312,18 +328,22 @@ def analyze_parsed_products(parsed_products):
             results["taxonomy"]["Matières"].add(mat)
             if p["price"]:
                 results["price_by_material"][mat].append(p["price"])
-            results["combos_type_mat"][f"{ptype.lower()} {mat.lower()}"] += 1
+            # Combos: uniquement les produits en stock
+            if is_in_stock:
+                results["combos_type_mat"][f"{ptype.lower()} {mat.lower()}"] += 1
 
         for col in p["colors"]:
             results["color_count"][col] += 1
             results["taxonomy"]["Couleurs"].add(col)
-            results["combos_type_col"][f"{ptype.lower()} {col.lower()}"] += 1
+            if is_in_stock:
+                results["combos_type_col"][f"{ptype.lower()} {col.lower()}"] += 1
 
         for coupe in p["coupes"]:
             results["coupe_count"][coupe] += 1
             results["coupe_by_type"][coupe][ptype] += 1
             results["taxonomy"]["Coupes"].add(coupe)
-            results["combos_type_coupe"][f"{ptype.lower()} {coupe.lower()}"] += 1
+            if is_in_stock:
+                results["combos_type_coupe"][f"{ptype.lower()} {coupe.lower()}"] += 1
 
         for forme in p["formes"]:
             results["forme_count"][forme] += 1
@@ -336,7 +356,8 @@ def analyze_parsed_products(parsed_products):
         for coll in p["collections"]:
             results["collection_count"][coll] += 1
             results["taxonomy"]["Collections"].add(coll)
-            results["combos_type_coll"][f"{ptype.lower()} {coll.lower()}"] += 1
+            if is_in_stock:
+                results["combos_type_coll"][f"{ptype.lower()} {coll.lower()}"] += 1
 
         for saison in p.get("saisons", []):
             results["saison_count"][saison] += 1
@@ -354,10 +375,11 @@ def analyze_parsed_products(parsed_products):
             results["category_count"][cat] += 1
             results["taxonomy"]["Catégories principales"].add(cat)
 
-        # Triple combo: type + matière + couleur
-        for mat in p["materials"]:
-            for col in p["colors"]:
-                results["combos_mat_col"][f"{ptype.lower()} {mat.lower()} {col.lower()}"] += 1
+        # Triple combo: type + matière + couleur (uniquement en stock)
+        if is_in_stock:
+            for mat in p["materials"]:
+                for col in p["colors"]:
+                    results["combos_mat_col"][f"{ptype.lower()} {mat.lower()} {col.lower()}"] += 1
 
     return results
 
@@ -624,12 +646,15 @@ def build_excel(results, df_matched, store_name):
 
     # 6. Tous les produits
     ws6 = wb.create_sheet("📋 Tous les produits")
-    ws6.append(["Produit", "Type", "Matières", "Composition", "Couleurs", "Coupes", "Formes", "Prix (€)", "Ancien prix (€)", "URL"])
-    style_header(ws6, 10)
+    ws6.append(["Produit", "Type", "Matières", "Composition", "Couleurs", "Coupes", "Formes", "Prix (€)", "Ancien prix (€)", "En stock", "Tailles dispo", "Publié le", "URL"])
+    style_header(ws6, 13)
     for p in results["products"]:
+        stock_label = "✅" if p.get("in_stock", True) else "❌"
+        tailles = f"{p.get('available_variants', '')}/{p.get('total_variants', '')}" if p.get("total_variants") else ""
+        published = str(p.get("published_at", ""))[:10] if p.get("published_at") else ""
         ws6.append([p["title"], p["type"], p["materials_str"], p["composition"],
                      p["colors_str"], p["coupes_str"], p["formes_str"],
-                     p["price"], p.get("compare_price", ""), p["url"]])
+                     p["price"], p.get("compare_price", ""), stock_label, tailles, published, p["url"]])
 
     # 7. Taxonomie — 11 colonnes comme le ref
     ws7 = wb.create_sheet("🗂 Taxonomie")
@@ -864,7 +889,9 @@ with st.sidebar:
 
     if "ac_results" in st.session_state:
         r = st.session_state["ac_results"]
-        st.success(f"✅ {r['total']} produits chargés")
+        in_stock = r.get("total_in_stock", r["total"])
+        out_stock = r.get("total_out_of_stock", 0)
+        st.success(f"✅ {r['total']} produits chargés — 📦 {in_stock} en stock, ❌ {out_stock} en rupture")
 
     st.divider()
 
