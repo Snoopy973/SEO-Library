@@ -1,648 +1,555 @@
 import streamlit as st
+import requests
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.formatting.rule import CellIsRule, FormulaRule
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.dataframe import dataframe_to_rows
-from io import BytesIO
-import time
+import json
+import re
 from datetime import datetime
+from collections import Counter
+import io
 
+# ============================================================================
+# CONFIG
+# ============================================================================
+# st.set_page_config est appelé par seo_tools.py (entrypoint)
 
-st.title("📊 Outil de Ré-optimisation de Contenus SEO")
-st.markdown("Générez un fichier d'analyse pour identifier les pages en perte de position, clics et CTR.")
+# SESSION STATE
+if 'results' not in st.session_state:
+    st.session_state.results = []
 
-# Session state pour les noms de colonnes
-if 'column_names' not in st.session_state:
-    st.session_state.column_names = {
-        # GSC extraction
-        'gsc_page': 'page',
-        'gsc_clicks': 'clicks',
-        'gsc_impressions': 'impressions',
-        'gsc_ctr': 'ctr',
-        'gsc_position': 'position',
-        'gsc_start_date': 'start_date',
-        'gsc_end_date': 'end_date',
-        # GSC consolidation
-        'consolidation_page': 'Page',
-        'consolidation_keywords': 'Mots clés',
-        # Ahrefs top pages
-        'ahrefs_url': 'URL',
-        'ahrefs_current_top_keyword': 'Current top keyword',
-        'ahrefs_previous_position': 'Previous top keyword: Position',
-        'ahrefs_current_position': 'Current top keyword: Position',
-    }
+# ============================================================================
+# CONSTANTES
+# ============================================================================
+COUNTRIES = {
+    "France": {"location_name": "France", "language_name": "French", "se_domain": "google.fr"},
+    "Belgium (FR)": {"location_name": "Belgium", "language_name": "French", "se_domain": "google.be"},
+    "Switzerland (FR)": {"location_name": "Switzerland", "language_name": "French", "se_domain": "google.ch"},
+    "United States": {"location_name": "United States", "language_name": "English", "se_domain": "google.com"},
+    "Germany": {"location_name": "Germany", "language_name": "German", "se_domain": "google.de"},
+    "Spain": {"location_name": "Spain", "language_name": "Spanish", "se_domain": "google.es"},
+    "Italy": {"location_name": "Italy", "language_name": "Italian", "se_domain": "google.it"},
+}
 
-# Section dépliante pour les noms de colonnes
-with st.expander("⚙️ Configuration des noms de colonnes", expanded=False):
-    st.markdown("**Modifiez les noms des colonnes si nécessaire (GSC et Ahrefs changent parfois les noms)**")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("##### Fichiers GSC (extraction par page)")
-        st.session_state.column_names['gsc_page'] = st.text_input("Colonne Page", value=st.session_state.column_names['gsc_page'])
-        st.session_state.column_names['gsc_clicks'] = st.text_input("Colonne Clics", value=st.session_state.column_names['gsc_clicks'])
-        st.session_state.column_names['gsc_impressions'] = st.text_input("Colonne Impressions", value=st.session_state.column_names['gsc_impressions'])
-        st.session_state.column_names['gsc_ctr'] = st.text_input("Colonne CTR", value=st.session_state.column_names['gsc_ctr'])
-        st.session_state.column_names['gsc_position'] = st.text_input("Colonne Position", value=st.session_state.column_names['gsc_position'])
-        st.session_state.column_names['gsc_start_date'] = st.text_input("Colonne Date début", value=st.session_state.column_names['gsc_start_date'])
-        st.session_state.column_names['gsc_end_date'] = st.text_input("Colonne Date fin", value=st.session_state.column_names['gsc_end_date'])
-    
-    with col2:
-        st.markdown("##### Fichier Consolidation GSC")
-        st.session_state.column_names['consolidation_page'] = st.text_input("Colonne Page (consolidation)", value=st.session_state.column_names['consolidation_page'])
-        st.session_state.column_names['consolidation_keywords'] = st.text_input("Colonne Mots-clés", value=st.session_state.column_names['consolidation_keywords'])
-        
-        st.markdown("##### Fichier Top Pages Ahrefs")
-        st.session_state.column_names['ahrefs_url'] = st.text_input("Colonne URL", value=st.session_state.column_names['ahrefs_url'])
-        st.session_state.column_names['ahrefs_current_top_keyword'] = st.text_input("Colonne Top Keyword actuel", value=st.session_state.column_names['ahrefs_current_top_keyword'])
-        st.session_state.column_names['ahrefs_previous_position'] = st.text_input("Colonne Position précédente", value=st.session_state.column_names['ahrefs_previous_position'])
-        st.session_state.column_names['ahrefs_current_position'] = st.text_input("Colonne Position actuelle", value=st.session_state.column_names['ahrefs_current_position'])
+STOPWORDS = {'le', 'la', 'les', 'un', 'une', 'des', 'de', 'du', 'à', 'au', 'en', 'et',
+             'ou', 'qui', 'que', 'ce', 'pour', 'par', 'sur', 'avec', 'dans', 'est', 'sont',
+             'the', 'a', 'an', 'is', 'are', 'to', 'of', 'in', 'for', 'on', 'with', 'and'}
 
-st.markdown("---")
+LLM_PROVIDERS = {
+    "Claude (Anthropic)": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022"],
+    "GPT (OpenAI)": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+    "Mistral": ["mistral-large-latest", "mistral-small-latest"],
+    "Groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+}
 
-# Upload des fichiers
-st.markdown("### 📁 Upload des fichiers")
+DEFAULT_PROMPT = """Tu es un expert SEO. Ta mission est d'analyser les balises title RÉELLES de la SERP Google et de proposer une title qui RESPECTE les structures gagnantes.
 
-col1, col2 = st.columns(2)
+RÈGLE ABSOLUE: Les titles scrappées ci-dessous sont la VÉRITÉ. Ta proposition DOIT s'en inspirer directement. Tu ne dois PAS inventer une structure qui n'existe pas dans les données.
 
-with col1:
-    gsc_old_file = st.file_uploader(
-        "**Extraction GSC - Date ancienne**",
-        type=['csv'],
-        help="Fichier CSV d'extraction GSC par page pour la période ancienne"
-    )
-    
-    gsc_new_file = st.file_uploader(
-        "**Extraction GSC - Date actuelle**",
-        type=['csv'],
-        help="Fichier CSV d'extraction GSC par page pour la période actuelle"
-    )
+DONNÉES SCRAPPÉES (SOURCE DE VÉRITÉ):
+===========================================
+BALISES TITLE GOOGLE (Top {titles_count}):
+{titles_list}
 
-with col2:
-    consolidation_file = st.file_uploader(
-        "**Consolidation mots-clés GSC**",
-        type=['xlsx'],
-        help="Fichier Excel de consolidation des mots-clés GSC"
-    )
-    
-    ahrefs_file = st.file_uploader(
-        "**Top Pages Ahrefs**",
-        type=['csv'],
-        help="Export CSV des Top Pages Ahrefs avec comparaison de positions"
-    )
+PATTERNS LES PLUS FRÉQUENTS (N-grams):
+{ngrams_list}
+===========================================
 
-st.markdown("---")
+CONTEXTE:
+- Mot-clé initial: "{keyword}"
+- Marque (optionnel): "{brand}"
+- Longueur max: {max_length} caractères
 
-def fix_encoding_issues(text):
-    """Corrige les problèmes d'encodage courants dans les textes"""
-    if not isinstance(text, str):
-        return text
-    
-    # Mapping des séquences mal encodées vers les caractères corrects
-    encoding_fixes = {
-        '√™': 'ê',   # ê mal encodé
-        '√©': 'é',   # é mal encodé
-        '√†': 'à',   # à mal encodé
-        '√¥': 'ô',   # ô mal encodé
-        '√ß': 'ç',   # ç mal encodé
-        '√®': 'è',
-        '√π': 'ù',
-        '√¢': 'â',
-        '√Æ': 'î',
-        '√¨': 'ì',
-        '√´': 'ë',
-        '√º': 'ü',
-        '√ø': 'ÿ',
-        '√î': 'É',
-        '√Ä': 'À',
-        '√Ö': 'Ç',
-        'Ã©': 'é',
-        'Ã¨': 'è',
-        'Ãª': 'ê',
-        'Ã ': 'à',
-        'Ã¢': 'â',
-        'Ã§': 'ç',
-        'Ã´': 'ô',
-        'Ã¹': 'ù',
-        'Ã®': 'î',
-        'Ã¯': 'ï',
-        'Ã«': 'ë',
-        'Ã¼': 'ü',
-        'Ã¿': 'ÿ',
-        'Ã‰': 'É',
-        'Ã€': 'À',
-        'Ã‡': 'Ç',
-        'Ã"': 'Ô',
-        'Ãˆ': 'È',
-        'â€™': "'",
-        'â€"': '–',
-        'â€"': '—',
-        'â€œ': '"',
-        'â€': '"',
-        'Â ': ' ',
-        'Â': '',
-    }
-    
-    for bad, good in encoding_fixes.items():
-        text = text.replace(bad, good)
-    
-    return text
+MÉTHODE D'ANALYSE OBLIGATOIRE:
+1. IDENTIFIER LA STRUCTURE DOMINANTE: Regarde comment les titles commencent (ex: "Comment...", "Les meilleurs...", "[Mot] : ..."). La structure qui revient le plus = la structure à utiliser.
+2. IDENTIFIER LES MOTS RÉCURRENTS: Les mots qui apparaissent dans plusieurs titles sont les mots que Google valorise. Utilise-les.
+3. IDENTIFIER LE FORMAT: Note les séparateurs (: - |), la présence de dates, de chiffres, etc.
 
-def fix_dataframe_encoding(df):
-    """Applique la correction d'encodage à toutes les colonnes texte d'un DataFrame"""
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            df[col] = df[col].apply(lambda x: fix_encoding_issues(x) if isinstance(x, str) else x)
-    return df
+RÈGLES STRICTES:
+- Ta title DOIT reprendre la structure dominante des titles scrappées
+- Ta title DOIT contenir les mots/expressions qui reviennent le plus souvent
+- Tu ne dois PAS inventer des mots ou structures absents des données
+- Si 6 titles sur 10 commencent par "Comment", ta title DOIT commencer par "Comment"
+- Si "meilleur", "guide", "comparatif" reviennent souvent, utilise-les
+- Longueur: 50-{max_length} caractères max
 
-def read_gsc_csv(file):
-    """Lit un fichier CSV GSC avec tentatives multi-encodages (sans chardet)"""
-    # Essayer plusieurs encodages courants, mac_roman en priorité pour les fichiers Mac
-    encodings_to_try = ['utf-8-sig', 'mac_roman', 'utf-8', 'cp1252', 'latin-1', 'iso-8859-1']
-    
-    df = None
-    for encoding in encodings_to_try:
-        try:
-            file.seek(0)
-            df = pd.read_csv(file, encoding=encoding)
-            break
-        except (UnicodeDecodeError, UnicodeError, LookupError):
-            continue
-    
-    # Si aucun encodage ne fonctionne, utiliser 'replace' pour les erreurs
-    if df is None:
-        file.seek(0)
-        df = pd.read_csv(file, encoding='utf-8', errors='replace')
-    
-    # Appliquer la correction d'encodage
-    df = fix_dataframe_encoding(df)
-    
-    return df
+EXEMPLE DE RAISONNEMENT:
+Si les titles sont:
+- "Comment choisir son matelas"
+- "Comment bien choisir un matelas"
+- "Comment choisir le bon matelas"
+→ Structure dominante = "Comment [bien] choisir [son/un/le bon] matelas"
+→ Ta proposition = "Comment bien choisir son matelas : guide complet" (si "guide" apparaît ailleurs)
 
-def read_consolidation_xlsx(file):
-    """Lit le fichier de consolidation Excel"""
-    df = pd.read_excel(file)
-    df = fix_dataframe_encoding(df)
-    return df
+RÉPONDS UNIQUEMENT EN JSON STRICT:
+{{"title_proposed": "Title basée sur la structure dominante", "title_length": 55, "titles_alternatives": ["Variante 1 basée sur les données", "Variante 2 basée sur les données", "Variante 3 basée sur les données"], "structure_dominante": "La structure que tu as identifiée", "mots_cles_recurrents": ["mot1", "mot2", "mot3"], "intention_detectee": "transactionnelle|informationnelle|navigationnelle", "score_confiance": 85, "justification": "J'ai choisi cette structure car elle apparaît dans X titles sur {titles_count}"}}"""
 
-def read_ahrefs_csv(file):
-    """Lit un fichier CSV Ahrefs (UTF-16, tab-separated)"""
-    df = pd.read_csv(file, encoding='utf-16', sep='\t')
-    df = fix_dataframe_encoding(df)
-    return df
-
-def format_date(date_str, for_sheet_name=False):
-    """Formate une date au format xx/xx/xx ou xx-xx-xx pour les noms de feuilles"""
-    if pd.isna(date_str):
+# ============================================================================
+# FONCTIONS N-GRAMS
+# ============================================================================
+def clean_title(title):
+    if not title:
         return ""
+    title = re.sub(r'\s*[\|\-–—:]\s*[^|\-–—:]{0,40}$', '', title)
+    title = re.sub(r'[^\w\sàâäéèêëïîôùûüçœæ\'-]', ' ', title, flags=re.IGNORECASE)
+    title = re.sub(r'\s+', ' ', title).strip()
+    return title.lower()
+
+def extract_ngrams(text, n):
+    words = [w for w in text.split() if w not in STOPWORDS and len(w) > 2]
+    if len(words) < n:
+        return []
+    return [' '.join(words[i:i+n]) for i in range(len(words) - n + 1)]
+
+def analyze_titles(titles):
+    all_ngrams = Counter()
+    for title in titles:
+        cleaned = clean_title(title)
+        for n in range(2, 6):
+            all_ngrams.update(extract_ngrams(cleaned, n))
+    return all_ngrams.most_common(20)
+
+# ============================================================================
+# API DATAFORSEO
+# ============================================================================
+def get_serp_titles(keyword, login, password, config, depth=10):
+    url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
+
+    payload = [{
+        "keyword": keyword,
+        "location_name": config["location_name"],
+        "language_name": config["language_name"],
+        "se_domain": config["se_domain"],
+        "depth": depth,
+        "device": "desktop",
+        "os": "windows"
+    }]
+
     try:
-        date_obj = pd.to_datetime(date_str)
-        if for_sheet_name:
-            return date_obj.strftime('%d-%m-%y')  # Tirets pour les noms de feuilles
-        else:
-            return date_obj.strftime('%d/%m/%y')  # Slashes pour les en-têtes
-    except:
-        return str(date_str)
-
-def calculate_percentage_change(old_val, new_val):
-    """Calcule la différence en pourcentage"""
-    if pd.isna(old_val) or pd.isna(new_val):
-        return None
-    
-    # Si ancienne valeur = 0, calculer avec base 1 pour éviter division par 0
-    if old_val == 0:
-        if new_val == 0:
-            return 0  # 0 → 0 = 0% de changement
-        else:
-            # 0 → X = calculer avec base 1
-            return ((new_val - 1) / 1) * 100
-    
-    return ((new_val - old_val) / old_val) * 100
-
-def create_excel_file(df_main, df_gsc_old, df_gsc_new, df_consolidation, df_ahrefs, old_date, new_date, generation_date):
-    """Crée le fichier Excel avec mise en forme"""
-    wb = Workbook()
-    
-    # Feuille principale
-    ws_main = wb.active
-    ws_main.title = "Ré-optimisation"
-    
-    # Couleurs
-    blue_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-    green_fill = PatternFill(start_color="548235", end_color="548235", fill_type="solid")
-    light_green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    light_red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-    yellow_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-    white_font = Font(name='Arial', size=10, bold=True, color="FFFFFF")
-    normal_font = Font(name='Arial', size=10)
-    italic_font = Font(name='Arial', size=10, italic=True)  # Police italique pour "Aucune donnée remontée"
-    
-    thin_border = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin')
-    )
-    
-    # En-têtes
-    old_date_fmt = format_date(old_date)
-    new_date_fmt = format_date(new_date)
-    
-    headers = [
-        "Page",
-        "Mots-clés (GSC)",
-        "Top Mot-clé (GSC)",
-        "Top Mot-clé (Ahrefs)",
-        f"Position au {old_date_fmt}",
-        f"Position au {new_date_fmt}",
-        f"Clics {old_date_fmt}",
-        f"Clics {new_date_fmt}",
-        "Différence de clics",
-        f"Impressions {old_date_fmt}",
-        f"Impressions {new_date_fmt}",
-        "Différence d'impressions",
-        f"CTR {old_date_fmt}",
-        f"CTR {new_date_fmt}",
-        "Différence de CTR",
-        "Position moy.",
-        "Briefs de ré-optimisation",
-        "Commentaires"
-    ]
-    
-    # Écrire les en-têtes
-    for col_idx, header in enumerate(headers, 1):
-        cell = ws_main.cell(row=1, column=col_idx, value=header)
-        cell.font = white_font
-        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        cell.border = thin_border
-        # Colonnes G à P (7 à 16) en vert, le reste en bleu
-        if 7 <= col_idx <= 16:
-            cell.fill = green_fill
-        else:
-            cell.fill = blue_fill
-    
-    # Écrire les données (limité à 18 colonnes - A à R)
-    max_columns = 18
-    for row_idx, row_data in enumerate(df_main.itertuples(index=False), 2):
-        for col_idx, value in enumerate(row_data[:max_columns], 1):  # Limiter à 18 colonnes
-            # Colonne A : URLs cliquables
-            if col_idx == 1:  # Colonne Page (A)
-                if pd.notna(value) and value:
-                    cell = ws_main.cell(row=row_idx, column=col_idx)
-                    cell.value = f'=HYPERLINK("{value}","{value}")'
-                    cell.font = Font(name='Arial', size=10, color="0563C1", underline="single")
-                else:
-                    cell = ws_main.cell(row=row_idx, column=col_idx, value="Aucune donnée remontée")
-                    cell.font = italic_font
-            # Colonnes texte B, C, D
-            elif col_idx in [2, 3, 4]:
-                if pd.isna(value) or value == '' or value is None:
-                    display_value = "Aucune donnée remontée"
-                    cell = ws_main.cell(row=row_idx, column=col_idx, value=display_value)
-                    cell.font = italic_font
-                else:
-                    cell = ws_main.cell(row=row_idx, column=col_idx, value=value)
-                    cell.font = normal_font
-            # Colonnes numériques E à P (5 à 16)
-            elif col_idx in range(5, 17):
-                if pd.isna(value) or value is None:
-                    display_value = "Aucune donnée remontée"
-                    cell = ws_main.cell(row=row_idx, column=col_idx, value=display_value)
-                    cell.font = italic_font
-                else:
-                    cell = ws_main.cell(row=row_idx, column=col_idx, value=value)
-                    cell.font = normal_font
-            # Colonnes Q et R (17, 18) - laisser vides
-            else:
-                cell = ws_main.cell(row=row_idx, column=col_idx, value=None)
-                cell.font = normal_font
-            
-            # Alignement : centrer les colonnes numériques (E à P, colonnes 5 à 16)
-            if col_idx in range(5, 17):  # Colonnes E à P
-                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-            else:
-                cell.alignment = Alignment(vertical='center', wrap_text=True)
-            
-            cell.border = thin_border
-            
-            # Format spécifique pour certaines colonnes
-            if col_idx in [5, 6, 16]:  # Positions - sans décimales
-                if value is not None and not pd.isna(value):
-                    cell.number_format = '0'
-            elif col_idx in [13, 14]:  # CTR - 1 décimale en pourcentage
-                if value is not None and not pd.isna(value):
-                    cell.number_format = '0.0%'
-            elif col_idx in [9, 12, 15]:  # Différences en pourcentage
-                if value is not None and not pd.isna(value):
-                    cell.number_format = '0.0%'
-    
-    # Mise en forme conditionnelle pour les colonnes E et F (positions)
-    # Si F < E (amélioration) : E rouge, F vert
-    # Si F > E (dégradation) : E vert, F rouge  
-    # Si F = E : jaune
-    # Ne pas colorer si "Aucune donnée remontée" (texte) - vérifier avec ISNUMBER()
-    last_row = len(df_main) + 1
-    
-    # Colonne E - Position ancienne
-    ws_main.conditional_formatting.add(
-        f'E2:E{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),ISNUMBER(F2),F2<E2)'], fill=light_red_fill)
-    )
-    ws_main.conditional_formatting.add(
-        f'E2:E{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),ISNUMBER(F2),F2>E2)'], fill=light_green_fill)
-    )
-    ws_main.conditional_formatting.add(
-        f'E2:E{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),ISNUMBER(F2),F2=E2)'], fill=yellow_fill)
-    )
-    
-    # Colonne F - Position actuelle
-    ws_main.conditional_formatting.add(
-        f'F2:F{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),ISNUMBER(F2),F2<E2)'], fill=light_green_fill)
-    )
-    ws_main.conditional_formatting.add(
-        f'F2:F{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),ISNUMBER(F2),F2>E2)'], fill=light_red_fill)
-    )
-    ws_main.conditional_formatting.add(
-        f'F2:F{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),ISNUMBER(F2),F2=E2)'], fill=yellow_fill)
-    )
-    
-    # Nouvelle mise en forme conditionnelle : gestion des valeurs manquantes avec NOMBRES uniquement
-    dark_yellow_fill = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
-    
-    # Si donnée numérique en E mais pas en F : E vert, F rouge
-    ws_main.conditional_formatting.add(
-        f'E2:E{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),NOT(ISNUMBER(F2)))'], fill=light_green_fill)
-    )
-    ws_main.conditional_formatting.add(
-        f'F2:F{last_row}',
-        FormulaRule(formula=['AND(ISNUMBER(E2),NOT(ISNUMBER(F2)))'], fill=light_red_fill)
-    )
-    
-    # Si donnée numérique en F mais pas en E : E rouge, F vert
-    ws_main.conditional_formatting.add(
-        f'E2:E{last_row}',
-        FormulaRule(formula=['AND(NOT(ISNUMBER(E2)),ISNUMBER(F2))'], fill=light_red_fill)
-    )
-    ws_main.conditional_formatting.add(
-        f'F2:F{last_row}',
-        FormulaRule(formula=['AND(NOT(ISNUMBER(E2)),ISNUMBER(F2))'], fill=light_green_fill)
-    )
-    
-    # Note : Si les deux sont du texte ("Aucune donnée remontée"), pas de mise en forme = fond blanc
-    
-    # Mise en forme conditionnelle pour I, L, O (différences)
-    for col in ['I', 'L', 'O']:
-        ws_main.conditional_formatting.add(
-            f'{col}2:{col}{last_row}',
-            CellIsRule(operator='greaterThan', formula=['0'], fill=light_green_fill)
+        response = requests.post(
+            url,
+            auth=(login, password),
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=120
         )
-        ws_main.conditional_formatting.add(
-            f'{col}2:{col}{last_row}',
-            CellIsRule(operator='lessThan', formula=['0'], fill=light_red_fill)
-        )
-    
-    # Largeurs de colonnes
-    column_widths = {
-        'A': 60, 'B': 40, 'C': 25, 'D': 25, 'E': 15, 'F': 15,
-        'G': 12, 'H': 12, 'I': 15, 'J': 15, 'K': 15, 'L': 18,
-        'M': 12, 'N': 12, 'O': 15, 'P': 12, 'Q': 30, 'R': 30
-    }
-    for col, width in column_widths.items():
-        ws_main.column_dimensions[col].width = width
-    
-    # Hauteur des lignes (68 pixels ≈ 51 points)
-    for row in range(1, last_row + 1):
-        ws_main.row_dimensions[row].height = 51
-    
-    # Freeze panes (ligne 1 et colonne A)
-    ws_main.freeze_panes = 'B2'
-    
-    # Supprimer les colonnes S à Z (colonnes 19 à 26) si elles existent
-    # On les supprime de droite à gauche pour ne pas décaler les indices
-    for col_idx in range(26, 18, -1):  # De Z (26) à S (19)
-        col_letter = get_column_letter(col_idx)
-        if col_letter in ws_main.column_dimensions:
-            ws_main.column_dimensions[col_letter].width = 0
-            ws_main.column_dimensions[col_letter].hidden = True
-    
-    # Feuilles de données brutes
-    # GSC ancien
-    old_date_sheet = format_date(old_date, for_sheet_name=True)
-    ws_gsc_old = wb.create_sheet(title=f"Extraction GSC {old_date_sheet}")
-    for r_idx, row in enumerate(dataframe_to_rows(df_gsc_old, index=False, header=True), 1):
-        for c_idx, value in enumerate(row, 1):
-            ws_gsc_old.cell(row=r_idx, column=c_idx, value=value)
-    
-    # GSC nouveau
-    new_date_sheet = format_date(new_date, for_sheet_name=True)
-    ws_gsc_new = wb.create_sheet(title=f"Extraction GSC {new_date_sheet}")
-    for r_idx, row in enumerate(dataframe_to_rows(df_gsc_new, index=False, header=True), 1):
-        for c_idx, value in enumerate(row, 1):
-            ws_gsc_new.cell(row=r_idx, column=c_idx, value=value)
-    
-    # Consolidation
-    ws_consolidation = wb.create_sheet(title=f"Consolidation GSC {generation_date}")
-    for r_idx, row in enumerate(dataframe_to_rows(df_consolidation, index=False, header=True), 1):
-        for c_idx, value in enumerate(row, 1):
-            ws_consolidation.cell(row=r_idx, column=c_idx, value=value)
-    
-    # Ahrefs
-    ws_ahrefs = wb.create_sheet(title=f"Top Pages Ahrefs {generation_date}")
-    for r_idx, row in enumerate(dataframe_to_rows(df_ahrefs, index=False, header=True), 1):
-        for c_idx, value in enumerate(row, 1):
-            ws_ahrefs.cell(row=r_idx, column=c_idx, value=value)
-    
-    return wb
 
-def process_data(df_gsc_old, df_gsc_new, df_consolidation, df_ahrefs, col_names):
-    """Traite et fusionne les données"""
-    
-    # Extraire les dates
-    old_date = df_gsc_old[col_names['gsc_start_date']].iloc[0]
-    new_date = df_gsc_new[col_names['gsc_end_date']].iloc[0]
-    
-    # Créer le DataFrame principal basé sur GSC actuel
-    df_main = pd.DataFrame()
-    df_main['Page'] = df_gsc_new[col_names['gsc_page']]
-    
-    # Joindre les données GSC ancien
-    df_gsc_old_renamed = df_gsc_old[[col_names['gsc_page'], col_names['gsc_clicks'], 
-                                     col_names['gsc_impressions'], col_names['gsc_ctr']]].copy()
-    df_gsc_old_renamed.columns = ['Page', 'clicks_old', 'impressions_old', 'ctr_old']
-    
-    df_main = df_main.merge(df_gsc_old_renamed, on='Page', how='left')
-    
-    # Ajouter les données GSC actuel
-    df_main['clicks_new'] = df_gsc_new[col_names['gsc_clicks']].values
-    df_main['impressions_new'] = df_gsc_new[col_names['gsc_impressions']].values
-    df_main['ctr_new'] = df_gsc_new[col_names['gsc_ctr']].values
-    df_main['position_avg'] = df_gsc_new[col_names['gsc_position']].values
-    
-    # Joindre les mots-clés de la consolidation
-    df_consolidation_subset = df_consolidation[[col_names['consolidation_page'], 
-                                                 col_names['consolidation_keywords']]].copy()
-    df_consolidation_subset.columns = ['Page', 'keywords']
-    df_main = df_main.merge(df_consolidation_subset, on='Page', how='left')
-    
-    # Joindre les données Ahrefs
-    df_ahrefs_subset = df_ahrefs[[col_names['ahrefs_url'], col_names['ahrefs_current_top_keyword'],
-                                   col_names['ahrefs_previous_position'], col_names['ahrefs_current_position']]].copy()
-    df_ahrefs_subset.columns = ['Page', 'top_keyword_ahrefs', 'position_old_ahrefs', 'position_new_ahrefs']
-    df_main = df_main.merge(df_ahrefs_subset, on='Page', how='left')
-    
-    # Calculer les différences
-    df_main['clicks_diff'] = df_main.apply(
-        lambda row: calculate_percentage_change(row['clicks_old'], row['clicks_new']), axis=1
-    )
-    df_main['impressions_diff'] = df_main.apply(
-        lambda row: calculate_percentage_change(row['impressions_old'], row['impressions_new']), axis=1
-    )
-    df_main['ctr_diff'] = df_main.apply(
-        lambda row: calculate_percentage_change(row['ctr_old'], row['ctr_new']), axis=1
-    )
-    
-    # Extraire le premier mot-clé
-    df_main['top_keyword_gsc'] = df_main['keywords'].apply(
-        lambda x: str(x).split('\n')[0] if pd.notna(x) else ''
-    )
-    
-    # Convertir les pourcentages de différence en décimal pour Excel
-    df_main['clicks_diff'] = df_main['clicks_diff'].apply(lambda x: x/100 if pd.notna(x) else None)
-    df_main['impressions_diff'] = df_main['impressions_diff'].apply(lambda x: x/100 if pd.notna(x) else None)
-    df_main['ctr_diff'] = df_main['ctr_diff'].apply(lambda x: x/100 if pd.notna(x) else None)
-    
-    # Réorganiser les colonnes dans l'ordre final
-    df_final = pd.DataFrame({
-        'Page': df_main['Page'],
-        'Mots-clés (GSC)': df_main['keywords'],
-        'Top Mot-clé (GSC)': df_main['top_keyword_gsc'],
-        'Top Mot-clé (Ahrefs)': df_main['top_keyword_ahrefs'],
-        'Position ancienne': df_main['position_old_ahrefs'],
-        'Position actuelle': df_main['position_new_ahrefs'],
-        'Clics anciens': df_main['clicks_old'],
-        'Clics actuels': df_main['clicks_new'],
-        'Différence clics': df_main['clicks_diff'],
-        'Impressions anciennes': df_main['impressions_old'],
-        'Impressions actuelles': df_main['impressions_new'],
-        'Différence impressions': df_main['impressions_diff'],
-        'CTR ancien': df_main['ctr_old'],
-        'CTR actuel': df_main['ctr_new'],
-        'Différence CTR': df_main['ctr_diff'],
-        'Position moy.': df_main['position_avg'],
-        'Briefs': None,  # Laisser vide au lieu de ''
-        'Commentaires': None  # Laisser vide au lieu de ''
-    })
-    
-    # S'assurer qu'il n'y a que 18 colonnes (A à R)
-    df_final = df_final.iloc[:, :18]
-    
-    return df_final, old_date, new_date
+        if response.status_code != 200:
+            return None, f"HTTP {response.status_code}"
 
-# Bouton de génération
-st.markdown("### 🚀 Générer le fichier")
+        data = response.json()
 
-all_files_uploaded = all([gsc_old_file, gsc_new_file, consolidation_file, ahrefs_file])
+        if data.get("status_code") != 20000:
+            return None, f"API: {data.get('status_message')}"
 
-if not all_files_uploaded:
-    st.warning("⚠️ Veuillez uploader tous les fichiers requis pour générer l'analyse.")
+        tasks = data.get("tasks", [])
+        if not tasks:
+            return None, "Pas de tasks"
 
-if st.button("Générer le fichier Excel", disabled=not all_files_uploaded, type="primary"):
-    
-    # Conteneur pour le chronomètre
-    timer_placeholder = st.empty()
-    progress_placeholder = st.empty()
-    
-    start_time = time.time()
-    
-    try:
-        # Afficher le chronomètre
-        with timer_placeholder.container():
-            st.info("⏱️ Génération en cours...")
-        
-        progress_bar = progress_placeholder.progress(0)
-        
-        # Lecture des fichiers
-        progress_bar.progress(10)
-        df_gsc_old = read_gsc_csv(gsc_old_file)
-        
-        progress_bar.progress(25)
-        df_gsc_new = read_gsc_csv(gsc_new_file)
-        
-        progress_bar.progress(40)
-        df_consolidation = read_consolidation_xlsx(consolidation_file)
-        
-        progress_bar.progress(55)
-        df_ahrefs = read_ahrefs_csv(ahrefs_file)
-        
-        # Traitement des données
-        progress_bar.progress(70)
-        df_final, old_date, new_date = process_data(
-            df_gsc_old, df_gsc_new, df_consolidation, df_ahrefs,
-            st.session_state.column_names
-        )
-        
-        # Création du fichier Excel
-        progress_bar.progress(85)
-        generation_date_fmt = datetime.now().strftime('%d-%m-%y')  # Tirets pour les noms de feuilles
-        wb = create_excel_file(
-            df_final, df_gsc_old, df_gsc_new, df_consolidation, df_ahrefs,
-            old_date, new_date, generation_date_fmt
-        )
-        
-        progress_bar.progress(100)
-        
-        # Sauvegarder dans un buffer
-        buffer = BytesIO()
-        wb.save(buffer)
-        buffer.seek(0)
-        
-        elapsed_time = time.time() - start_time
-        
-        # Afficher le résultat
-        timer_placeholder.empty()
-        progress_placeholder.empty()
-        
-        st.success(f"✅ Fichier généré avec succès en **{elapsed_time:.2f} secondes** !")
-        st.info(f"📊 **{len(df_final)}** pages analysées")
-        
-        # Bouton de téléchargement
-        today = datetime.now().strftime('%Y-%m-%d')
-        filename = f"reoptimisation_seo_{today}.xlsx"
-        
-        st.download_button(
-            label="📥 Télécharger le fichier Excel",
-            data=buffer,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
-        
-        # Aperçu des données
-        with st.expander("👁️ Aperçu des données", expanded=False):
-            st.dataframe(df_final.head(20), use_container_width=True)
-            
+        task = tasks[0]
+        if task.get("status_code") != 20000:
+            return None, f"Task: {task.get('status_message')}"
+
+        results = task.get("result", [])
+        if not results:
+            return None, "Pas de résultats"
+
+        items = results[0].get("items", [])
+        if not items:
+            return None, "Pas d'items"
+
+        titles = []
+        for item in items:
+            if item.get("type") == "organic":
+                title = item.get("title", "")
+                if title:
+                    titles.append(title)
+
+        if not titles:
+            return None, "Pas de titles organiques"
+
+        return titles, None
+
+    except requests.exceptions.Timeout:
+        return None, "Timeout"
     except Exception as e:
-        timer_placeholder.empty()
-        progress_placeholder.empty()
-        st.error(f"❌ Erreur lors de la génération : {str(e)}")
-        st.exception(e)
+        return None, str(e)
 
-# Footer
+# ============================================================================
+# API LLM
+# ============================================================================
+def analyze_with_llm(titles, keyword, brand, max_length, top_ngrams, provider, model, api_key, custom_prompt):
+    # Préparer les variables pour le prompt
+    titles_list = chr(10).join([f"- {t}" for t in titles])
+    ngrams_list = chr(10).join([f"- '{ng}': {c} occurrences" for ng, c in top_ngrams[:10]])
+
+    # Remplacer les placeholders dans le prompt
+    prompt = custom_prompt.format(
+        keyword=keyword,
+        brand=brand if brand else "Non spécifié",
+        max_length=max_length,
+        titles_count=len(titles),
+        titles_list=titles_list,
+        ngrams_list=ngrams_list
+    )
+
+    try:
+        if provider == "Claude (Anthropic)":
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                json={"model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]},
+                timeout=60
+            )
+            if resp.status_code != 200:
+                return None, f"Claude API: {resp.status_code} - {resp.text}"
+            text = resp.json().get("content", [{}])[0].get("text", "")
+
+        elif provider == "GPT (OpenAI)":
+            resp = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 1024},
+                timeout=60
+            )
+            if resp.status_code != 200:
+                return None, f"OpenAI API: {resp.status_code} - {resp.text}"
+            text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        elif provider == "Mistral":
+            resp = requests.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 1024},
+                timeout=60
+            )
+            if resp.status_code != 200:
+                return None, f"Mistral API: {resp.status_code} - {resp.text}"
+            text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        elif provider == "Groq":
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 1024},
+                timeout=60
+            )
+            if resp.status_code != 200:
+                return None, f"Groq API: {resp.status_code} - {resp.text}"
+            text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        else:
+            return None, "Provider non supporté"
+
+        # Parser le JSON
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group()), None
+        return None, "JSON non trouvé dans la réponse"
+
+    except json.JSONDecodeError as e:
+        return None, f"JSON invalide: {e}"
+    except Exception as e:
+        return None, str(e)
+
+# ============================================================================
+# INTERFACE STREAMLIT
+# ============================================================================
+st.title("🏷️ Title Optimizer")
+st.markdown("**Analyse les balises title de la SERP et génère des titles SEO optimisées**")
+
+# SIDEBAR - Configuration
+st.sidebar.header("🔐 Configuration")
+
+st.sidebar.subheader("DataForSEO")
+dfs_login = st.sidebar.text_input("Login", key="to_dfs_login")
+dfs_password = st.sidebar.text_input("Password", type="password", key="to_dfs_password")
+
+st.sidebar.subheader("LLM")
+llm_provider = st.sidebar.selectbox("Provider", list(LLM_PROVIDERS.keys()), key="to_llm_provider")
+llm_key = st.sidebar.text_input(f"API Key {llm_provider.split()[0]}", type="password", key="to_llm_key")
+llm_model = st.sidebar.selectbox("Modèle", LLM_PROVIDERS[llm_provider], key="to_llm_model")
+
+st.sidebar.subheader("Paramètres SERP")
+country = st.sidebar.selectbox("Pays", list(COUNTRIES.keys()), key="to_country")
+serp_depth = st.sidebar.slider("Nombre de titles à scrapper", 10, 100, 10, 10, key="to_serp_depth")
+
+st.sidebar.subheader("Paramètres Title")
+max_title_length = st.sidebar.number_input("Longueur max de la title", min_value=40, max_value=70, value=60, key="to_max_title_length")
+brand_name = st.sidebar.text_input("Nom de marque (facultatif)", placeholder="MaMarque", key="to_brand_name")
+
+# Vérification des credentials
+if not dfs_login or not dfs_password:
+    st.warning("👈 Entre tes identifiants DataForSEO dans la sidebar")
+    st.stop()
+
+if not llm_key:
+    st.warning("👈 Entre ta clé API LLM dans la sidebar")
+    st.stop()
+
+# ============================================================================
+# MAIN - Mots-clés
+# ============================================================================
+st.header("📝 Mots-clés à analyser")
+
+input_method = st.radio("Mode d'entrée:", ["Textarea", "CSV"], horizontal=True, key="to_input_method")
+
+keywords = []
+
+if input_method == "Textarea":
+    kw_text = st.text_area("Un mot-clé par ligne:", height=150, placeholder="chaussures running\nbaskets homme\nsneakers blanches", key="to_kw_text")
+    keywords = [k.strip() for k in kw_text.split("\n") if k.strip()]
+else:
+    uploaded = st.file_uploader("Fichier CSV", type=["csv"], key="to_csv_upload")
+    if uploaded:
+        df_up = pd.read_csv(uploaded)
+        st.dataframe(df_up.head())
+        col_kw = st.selectbox("Colonne contenant les mots-clés:", df_up.columns, key="to_col_kw")
+        keywords = df_up[col_kw].dropna().astype(str).tolist()
+
+if keywords:
+    st.success(f"📋 {len(keywords)} mot(s)-clé(s) prêts à analyser")
+
+# ============================================================================
+# PROMPT PERSONNALISABLE
+# ============================================================================
+st.header("🤖 Prompt LLM")
+
+with st.expander("✏️ Modifier le prompt (optionnel)", expanded=False):
+    st.markdown("""
+    **Variables disponibles:**
+    - `{keyword}` : Le mot-clé analysé
+    - `{brand}` : Le nom de marque (si renseigné)
+    - `{max_length}` : La longueur max de la title
+    - `{titles_count}` : Le nombre de titles scrappées
+    - `{titles_list}` : La liste des titles scrappées
+    - `{ngrams_list}` : La liste des n-grams détectés
+    """)
+    custom_prompt = st.text_area("Prompt:", value=DEFAULT_PROMPT, height=400, key="to_custom_prompt")
+
+if 'custom_prompt' not in dir() or not custom_prompt:
+    custom_prompt = DEFAULT_PROMPT
+
+# ============================================================================
+# BOUTONS ET TRAITEMENT
+# ============================================================================
 st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #666;'>
-        <small>Outil de ré-optimisation SEO | Développé pour l'analyse des performances de contenus</small>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+col_a, col_b = st.columns([2, 1])
+with col_a:
+    run_btn = st.button("🚀 Lancer l'analyse", type="primary", disabled=not keywords, key="to_run_btn")
+with col_b:
+    if st.button("🗑️ Reset", key="to_reset_btn"):
+        st.session_state.results = []
+        st.rerun()
+
+# TRAITEMENT
+if run_btn:
+    config = COUNTRIES[country]
+
+    st.session_state.results = []
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
+
+    for i, kw in enumerate(keywords):
+        progress_bar.progress((i + 1) / len(keywords))
+        progress_text.text(f"🔍 [{i+1}/{len(keywords)}] Scraping SERP pour: {kw}")
+
+        # Appel DataForSEO
+        titles, error = get_serp_titles(
+            keyword=kw,
+            login=dfs_login,
+            password=dfs_password,
+            config=config,
+            depth=serp_depth
+        )
+
+        # Construire le résultat
+        result = {
+            "keyword": kw,
+            "titles_scrapped": titles if titles else [],
+            "titles_count": len(titles) if titles else 0,
+            "ngrams": [],
+            "title_proposed": "",
+            "title_length": 0,
+            "titles_alternatives": [],
+            "structure_dominante": "",
+            "intention": "",
+            "patterns": [],
+            "score": 0,
+            "justification": "",
+            "error": error
+        }
+
+        if error:
+            st.session_state.results.append(result)
+            continue
+
+        # Analyse N-grams
+        top_ngrams = analyze_titles(titles)
+        result["ngrams"] = top_ngrams
+
+        # Analyse LLM
+        progress_text.text(f"🤖 [{i+1}/{len(keywords)}] Analyse IA pour: {kw}")
+
+        llm_result, llm_error = analyze_with_llm(
+            titles=titles,
+            keyword=kw,
+            brand=brand_name,
+            max_length=max_title_length,
+            top_ngrams=top_ngrams,
+            provider=llm_provider,
+            model=llm_model,
+            api_key=llm_key,
+            custom_prompt=custom_prompt
+        )
+
+        if llm_error:
+            result["error"] = f"LLM: {llm_error}"
+        else:
+            result["title_proposed"] = llm_result.get("title_proposed", "")
+            result["title_length"] = llm_result.get("title_length", len(result["title_proposed"]))
+            result["titles_alternatives"] = llm_result.get("titles_alternatives", [])
+            result["intention"] = llm_result.get("intention_detectee", "")
+            result["patterns"] = llm_result.get("mots_cles_recurrents", [])
+            result["structure_dominante"] = llm_result.get("structure_dominante", "")
+            result["score"] = llm_result.get("score_confiance", 0)
+            result["justification"] = llm_result.get("justification", "")
+
+        st.session_state.results.append(result)
+
+    progress_text.text("✅ Terminé!")
+    st.rerun()
+
+# ============================================================================
+# RÉSULTATS
+# ============================================================================
+if st.session_state.results:
+    st.header("📊 Résultats")
+
+    results = st.session_state.results
+
+    # Stats
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Mots-clés traités", len(results))
+    c2.metric("Titles scrappées", sum([r["titles_count"] for r in results]))
+    c3.metric("Titles générées", len([r for r in results if r["title_proposed"]]))
+    c4.metric("Erreurs", len([r for r in results if r.get("error")]))
+
+    # Affichage détaillé par mot-clé
+    st.subheader("🔍 Détail par mot-clé")
+
+    for r in results:
+        with st.expander(f"**{r['keyword']}** → {r['title_proposed'][:50]}..." if r['title_proposed'] else f"**{r['keyword']}** (erreur)", expanded=False):
+
+            if r.get("error"):
+                st.error(f"❌ Erreur: {r['error']}")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### 📥 Titles scrappées")
+                if r["titles_scrapped"]:
+                    for idx, title in enumerate(r["titles_scrapped"], 1):
+                        st.markdown(f"{idx}. {title}")
+                else:
+                    st.warning("Aucune title récupérée")
+
+                st.markdown("### 🔤 Patterns détectés (N-grams)")
+                if r["ngrams"]:
+                    for ng, count in r["ngrams"][:10]:
+                        st.markdown(f"- **{ng}**: {count} occurrences")
+                else:
+                    st.info("Aucun pattern détecté")
+
+            with col2:
+                st.markdown("### ✅ Title recommandée")
+                if r["title_proposed"]:
+                    st.success(r["title_proposed"])
+                    st.caption(f"📏 {r['title_length']} caractères | 🎯 Score: {r['score']}/100")
+
+                    if r.get("structure_dominante"):
+                        st.warning(f"📐 Structure dominante détectée: **{r['structure_dominante']}**")
+
+                    if r["intention"]:
+                        st.info(f"🧭 Intention détectée: **{r['intention']}**")
+
+                    if r["patterns"]:
+                        st.markdown("### 🔑 Mots-clés récurrents")
+                        st.write(", ".join(r["patterns"]))
+
+                    if r["titles_alternatives"]:
+                        st.markdown("### 🔄 Alternatives")
+                        for alt in r["titles_alternatives"]:
+                            st.markdown(f"- {alt}")
+
+                    if r["justification"]:
+                        st.markdown("### 💡 Justification")
+                        st.caption(r["justification"])
+                else:
+                    st.warning("Aucune title générée")
+
+    # ============================================================================
+    # TABLEAU RÉCAPITULATIF
+    # ============================================================================
+    st.subheader("📋 Tableau récapitulatif")
+
+    df_data = []
+    for r in results:
+        df_data.append({
+            "Mot-clé": r["keyword"],
+            "Titles scrappées": "\n".join(r["titles_scrapped"]) if r["titles_scrapped"] else "",
+            "Nb titles": r["titles_count"],
+            "Structure dominante": r.get("structure_dominante", ""),
+            "Title recommandée": r["title_proposed"],
+            "Longueur": r["title_length"],
+            "Alternatives": "\n".join(r["titles_alternatives"]) if r["titles_alternatives"] else "",
+            "Mots-clés récurrents": " | ".join(r["patterns"]) if r["patterns"] else "",
+            "Patterns N-grams": " | ".join([f"{ng} ({c})" for ng, c in r["ngrams"][:5]]) if r["ngrams"] else "",
+            "Intention": r["intention"],
+            "Score": r["score"],
+            "Justification": r["justification"],
+            "Erreur": r.get("error", "")
+        })
+
+    df = pd.DataFrame(df_data)
+
+    # Affichage du tableau
+    display_cols = ["Mot-clé", "Titles scrappées", "Nb titles", "Structure dominante", "Title recommandée", "Longueur", "Score"]
+    if any(r.get("error") for r in results):
+        display_cols.append("Erreur")
+
+    st.dataframe(df[display_cols], use_container_width=True)
+
+    # ============================================================================
+    # EXPORT
+    # ============================================================================
+    st.header("📥 Export")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # CSV
+        csv = df.to_csv(index=False, sep=";").encode('utf-8')
+        st.download_button(
+            "📄 Télécharger CSV",
+            csv,
+            f"title_optimizer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            "text/csv",
+            key="to_csv_dl",
+        )
+
+    with col2:
+        # Excel
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Résultats')
+        st.download_button(
+            "📊 Télécharger Excel",
+            buffer.getvalue(),
+            f"title_optimizer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="to_excel_dl",
+        )
+
+# ============================================================================
+# FOOTER
+# ============================================================================
+st.markdown("---")
+st.caption("Title Optimizer v1.0 | DataForSEO + LLM")
