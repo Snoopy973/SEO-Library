@@ -955,6 +955,16 @@ if has_products:
         if combo_key not in combos_with_materials:
             combos_with_materials[combo_key] = []
         combos_category[combo_key] = "Type + Coupe"
+    for combo_key in results.get("combos_type_coll", {}):
+        if combo_key not in combos_with_materials:
+            combos_with_materials[combo_key] = []
+        combos_category[combo_key] = "Type + Collection"
+    for combo_key in results.get("combos_mat_col", {}):
+        if combo_key not in combos_with_materials:
+            parts = combo_key.split()
+            mat = parts[1].capitalize() if len(parts) >= 2 else ""
+            combos_with_materials[combo_key] = [mat] if mat else []
+        combos_category[combo_key] = "Type + Matière + Couleur"
 
 if not combos_with_materials and df_keywords is not None:
     for _, row in df_keywords.iterrows():
