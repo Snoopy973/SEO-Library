@@ -1320,6 +1320,30 @@ if has_products:
                                    columns=["Combinaison", "Nb produits"])
             st.dataframe(df_ccp, use_container_width=True, hide_index=True)
 
+        if results.get("combos_type_genre"):
+            st.markdown("**👤 Type + Genre** (top 30)")
+            df_tg = pd.DataFrame(results["combos_type_genre"].most_common(30),
+                                  columns=["Combinaison", "Nb produits"])
+            st.dataframe(df_tg, use_container_width=True, hide_index=True)
+
+        if results.get("combos_type_genre_mat"):
+            st.markdown("**👤🧵 Type + Genre + Matière** (top 30)")
+            df_tgm = pd.DataFrame(results["combos_type_genre_mat"].most_common(30),
+                                   columns=["Combinaison", "Nb produits"])
+            st.dataframe(df_tgm, use_container_width=True, hide_index=True)
+
+        if results.get("combos_type_genre_col"):
+            st.markdown("**👤🎨 Type + Genre + Couleur** (top 30)")
+            df_tgc = pd.DataFrame(results["combos_type_genre_col"].most_common(30),
+                                   columns=["Combinaison", "Nb produits"])
+            st.dataframe(df_tgc, use_container_width=True, hide_index=True)
+
+        if results.get("combos_type_genre_coupe"):
+            st.markdown("**👤📐 Type + Genre + Coupe** (top 30)")
+            df_tgcp = pd.DataFrame(results["combos_type_genre_coupe"].most_common(30),
+                                    columns=["Combinaison", "Nb produits"])
+            st.dataframe(df_tgcp, use_container_width=True, hide_index=True)
+
     tab_idx += 1
 
 # ── TAB POSITIONS & GAPS ──
