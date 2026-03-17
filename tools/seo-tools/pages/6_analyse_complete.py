@@ -1434,6 +1434,24 @@ if has_ahrefs:
 
             # Table — hide internal _matiere column
             st.markdown("### 📋 Détail")
+            with st.expander("ℹ️ **Comment est calculé le Score de priorité ?**", expanded=False):
+                st.markdown("""
+Le **Score de priorité** (0–100) identifie les mots-clés où Balibaris a le plus à gagner. Il combine 3 facteurs :
+
+| Facteur | Poids | Logique |
+|---|---|---|
+| 📈 **Volume de recherche** | 40% | Plus le volume est élevé, plus le potentiel de trafic est important |
+| 📦 **Nb produits Balibaris** | 30% | Plus Balibaris a de produits correspondants, plus la page sera riche et pertinente |
+| 🎯 **Facilité (100 − KD)** | 30% | Plus la difficulté (KD) est basse, plus il est facile de se positionner |
+
+**Formule :**
+```
+Score = (Volume / Vol_max) × 40 + (Nb_produits / Prod_max) × 30 + ((100 − KD) / 100) × 30
+```
+
+**Lecture :** Un score de **85+** = mot-clé à fort volume, beaucoup de produits, et faible concurrence → **priorité maximale**.
+Un score de **30−** = peu de volume ou forte concurrence → à traiter plus tard.
+""")
             display_cols = [c for c in df_display.columns if not c.startswith("_")]
             st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True,
                           column_config={
