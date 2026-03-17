@@ -1088,16 +1088,17 @@ tab_idx = 0
 # ── TAB CATALOGUE ──
 if has_products:
     with tabs[tab_idx]:
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Produits", total)
         c2.metric("Types", len(results["type_count"]))
         c3.metric("Matières", len(results["materials_count"]))
         c4.metric("Couleurs", len(results["color_count"]))
         c5.metric("Coupes", len(results["coupe_count"]))
+        c6.metric("👤 Genres", len(results.get("genre_count", {})))
 
         import plotly.express as px
 
-        sub_t1, sub_t2, sub_t3, sub_t4 = st.tabs(["🧵 Matières", "📦 Types", "🎨 Couleurs", "📐 Coupes"])
+        sub_t1, sub_t2, sub_t3, sub_t4, sub_t5 = st.tabs(["🧵 Matières", "📦 Types", "🎨 Couleurs", "📐 Coupes", "👤 Genres"])
 
         with sub_t1:
             if results["materials_count"]:
@@ -1157,6 +1158,33 @@ if has_products:
                     st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Aucune donnée de coupe trouvée")
+
+        with sub_t5:
+            if results.get("genre_count"):
+                df_genre = pd.DataFrame(results["genre_count"].most_common(), columns=["Genre", "Nb produits"])
+                df_genre["% catalogue"] = (df_genre["Nb produits"] / total * 100).round(1)
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.dataframe(df_genre, use_container_width=True, hide_index=True)
+                with col2:
+                    fig = px.pie(df_genre, values="Nb produits", names="Genre", title="Répartition par genre")
+                    fig.update_layout(height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Détail : combos Type + Genre
+                if results.get("combos_type_genre"):
+                    st.markdown("**Produits par Type × Genre**")
+                    genre_combo_data = []
+                    for combo, count in results["combos_type_genre"].most_common():
+                        parts = combo.split()
+                        if len(parts) >= 2:
+                            genre_combo_data.append({"Type": parts[0].capitalize(), "Genre": parts[1].capitalize(), "Nb produits": count})
+                    if genre_combo_data:
+                        df_tg = pd.DataFrame(genre_combo_data)
+                        pivot = df_tg.pivot_table(index="Type", columns="Genre", values="Nb produits", fill_value=0, aggfunc="sum")
+                        st.dataframe(pivot, use_container_width=True)
+            else:
+                st.info("Aucune donnée de genre trouvée")
 
     tab_idx += 1
 
@@ -1309,7 +1337,13 @@ if has_ahrefs:
             all_materials = sorted(set(m for mats in combos_with_materials.values() for m in mats if m))
             all_combo_cats = sorted(df_matched["Type combinaison"].unique())
 
-            fc0, fc1, fc2, fc3, fc4 = st.columns(5)
+            # Detect genre from keyword for filtering
+            genre_keywords = {"homme", "femme"}
+            df_matched["_genre"] = df_matched["Mot-clé"].apply(
+                lambda x: next((w.capitalize() for w in str(x).lower().split() if w in genre_keywords), "Non genré"))
+            all_genres_filter = sorted(df_matched["_genre"].unique())
+
+            fc0, fc1, fc2, fc3, fc4, fc5 = st.columns(6)
             with fc0:
                 sel_combo_cat = st.multiselect("🏷️ Combinaison", options=all_combo_cats, default=[])
             with fc1:
@@ -1317,9 +1351,11 @@ if has_ahrefs:
             with fc2:
                 sel_mat = st.multiselect("🧵 Matière", options=all_materials, default=[])
             with fc3:
+                sel_genre = st.multiselect("👤 Genre", options=all_genres_filter, default=[])
+            with fc4:
                 all_corresp = sorted(df_matched["Correspondance"].unique())
                 sel_corresp = st.multiselect("📌 Correspondance", options=all_corresp, default=[])
-            with fc4:
+            with fc5:
                 vol_min = st.number_input("🔢 Volume min", min_value=0, value=0, step=100)
 
             df_display = df_matched.copy()
@@ -1330,6 +1366,8 @@ if has_ahrefs:
             if sel_mat:
                 df_display = df_display[df_display["_matiere"].apply(
                     lambda x: any(m.lower() in str(x).lower() for m in sel_mat))]
+            if sel_genre:
+                df_display = df_display[df_display["_genre"].isin(sel_genre)]
             if sel_corresp:
                 df_display = df_display[df_display["Correspondance"].isin(sel_corresp)]
             if vol_min > 0:
