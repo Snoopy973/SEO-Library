@@ -367,10 +367,6 @@ def analyze_parsed_products(parsed_products):
             results["saison_count"][saison] += 1
             results["taxonomy"]["Saisons"].add(saison)
 
-        for g in p.get("genre", []):
-            results["genre_count"][g] += 1
-            results["taxonomy"]["Genre"].add(g)
-
         for guide in p.get("guides", []):
             results["guide_count"][guide] += 1
             results["taxonomy"]["Guides de tailles"].add(guide)
@@ -385,10 +381,25 @@ def analyze_parsed_products(parsed_products):
                 for col in p["colors"]:
                     results["combos_mat_col"][f"{ptype.lower()} {mat.lower()} {col.lower()}"] += 1
 
+        # Detect genre: explicit tag OR inferred from collections/tags
+        genres = list(p.get("genre", []))
+        if not genres:
+            # Infer from collections or raw tags
+            all_text = " ".join(str(c).lower() for c in p.get("collections", []))
+            all_text += " " + " ".join(str(t).lower() for t in p.get("tags", []))
+            if "homme" in all_text and "femme" not in all_text:
+                genres = ["Homme"]
+            elif "femme" in all_text and "homme" not in all_text:
+                genres = ["Femme"]
+            elif "homme" in all_text and "femme" in all_text:
+                genres = ["Homme", "Femme"]
+
         # Gender combos (uniquement en stock)
         if is_in_stock:
-            for g in p.get("genre", []):
+            for g in genres:
                 g_lower = g.lower()
+                results["genre_count"][g] += 1
+                results["taxonomy"]["Genre"].add(g)
                 results["combos_type_genre"][f"{ptype.lower()} {g_lower}"] += 1
                 for mat in p["materials"]:
                     results["combos_type_genre_mat"][f"{ptype.lower()} {g_lower} {mat.lower()}"] += 1
@@ -1202,6 +1213,62 @@ if has_products:
     with tabs[tab_idx]:
         st.markdown("#### Combinaisons SEO — toutes les combinaisons type + attribut")
 
+        # ── COPIER / COLLER POUR AHREFS (en haut, bien visible) ──
+        with st.expander("📋 **Exporter les combinaisons pour Ahrefs**", expanded=True):
+            st.caption("Sélectionne les types de combinaisons, copie la liste et colle-la dans Ahrefs Keywords Explorer.")
+
+            combo_sources = {
+                "🧵 Type + Matière": results.get("combos_type_mat", {}),
+                "🎨 Type + Couleur": results.get("combos_type_col", {}),
+                "📐 Type + Coupe": results.get("combos_type_coupe", {}),
+                "📁 Type + Collection": results.get("combos_type_coll", {}),
+                "🔗 Type + Matière + Couleur": results.get("combos_mat_col", {}),
+                "👤 Type + Genre": results.get("combos_type_genre", {}),
+                "👤🧵 Type + Genre + Matière": results.get("combos_type_genre_mat", {}),
+                "👤🎨 Type + Genre + Couleur": results.get("combos_type_genre_col", {}),
+                "👤📐 Type + Genre + Coupe": results.get("combos_type_genre_coupe", {}),
+            }
+            combo_sources = {k: v for k, v in combo_sources.items() if v}
+
+            sel_sources = st.multiselect(
+                "Types de combinaisons à inclure",
+                options=list(combo_sources.keys()),
+                default=list(combo_sources.keys()),
+                key="ahrefs_combo_select"
+            )
+
+            all_kws = []
+            for src in sel_sources:
+                for kw, nb in combo_sources.get(src, {}).items():
+                    if nb > 0 and kw not in all_kws:
+                        all_kws.append(kw)
+            all_kws.sort()
+
+            col_info, col_dl = st.columns([3, 1])
+            with col_info:
+                st.metric("Mots-clés à exporter", len(all_kws))
+            with col_dl:
+                if all_kws:
+                    csv_content = "\n".join(all_kws)
+                    st.download_button(
+                        "⬇️ Télécharger en CSV",
+                        data=csv_content,
+                        file_name=f"combinaisons_ahrefs_{len(all_kws)}.csv",
+                        mime="text/csv",
+                        key="dl_ahrefs_csv"
+                    )
+
+            if all_kws:
+                kw_text = "\n".join(all_kws)
+                st.text_area(
+                    "Liste des mots-clés (un par ligne — Ctrl+A puis Ctrl+C pour copier)",
+                    value=kw_text,
+                    height=300,
+                    key="ahrefs_kw_list"
+                )
+
+        st.divider()
+
         if results["combos_type_mat"]:
             st.markdown("**🏆 Top Combinaisons Type + Matière**")
             combos_sorted = results["combos_type_mat"].most_common(50)
@@ -1224,63 +1291,6 @@ if has_products:
             df_ccp = pd.DataFrame(results["combos_type_coupe"].most_common(30),
                                    columns=["Combinaison", "Nb produits"])
             st.dataframe(df_ccp, use_container_width=True, hide_index=True)
-
-        # ── COPIER / COLLER POUR AHREFS ──
-        st.divider()
-        st.markdown("### 📋 Copier les combinaisons pour Ahrefs")
-        st.caption("Sélectionne les types de combinaisons, copie la liste et colle-la dans Ahrefs Keywords Explorer.")
-
-        combo_sources = {
-            "🧵 Type + Matière": results.get("combos_type_mat", {}),
-            "🎨 Type + Couleur": results.get("combos_type_col", {}),
-            "📐 Type + Coupe": results.get("combos_type_coupe", {}),
-            "📁 Type + Collection": results.get("combos_type_coll", {}),
-            "🔗 Type + Matière + Couleur": results.get("combos_mat_col", {}),
-            "👤 Type + Genre": results.get("combos_type_genre", {}),
-            "👤🧵 Type + Genre + Matière": results.get("combos_type_genre_mat", {}),
-            "👤🎨 Type + Genre + Couleur": results.get("combos_type_genre_col", {}),
-            "👤📐 Type + Genre + Coupe": results.get("combos_type_genre_coupe", {}),
-        }
-        # Remove empty sources
-        combo_sources = {k: v for k, v in combo_sources.items() if v}
-
-        sel_sources = st.multiselect(
-            "Types de combinaisons à inclure",
-            options=list(combo_sources.keys()),
-            default=list(combo_sources.keys()),
-            key="ahrefs_combo_select"
-        )
-
-        # Build keyword list
-        all_kws = []
-        for src in sel_sources:
-            for kw in combo_sources.get(src, {}).keys():
-                if kw not in all_kws:
-                    all_kws.append(kw)
-        all_kws.sort()
-
-        col_info, col_dl = st.columns([3, 1])
-        with col_info:
-            st.metric("Mots-clés à copier", len(all_kws))
-        with col_dl:
-            if all_kws:
-                csv_content = "\n".join(all_kws)
-                st.download_button(
-                    "⬇️ Télécharger en CSV",
-                    data=csv_content,
-                    file_name=f"combinaisons_ahrefs_{len(all_kws)}.csv",
-                    mime="text/csv",
-                    key="dl_ahrefs_csv"
-                )
-
-        if all_kws:
-            kw_text = "\n".join(all_kws)
-            st.text_area(
-                "Liste des mots-clés (un par ligne — sélectionne tout et copie)",
-                value=kw_text,
-                height=300,
-                key="ahrefs_kw_list"
-            )
 
     tab_idx += 1
 
