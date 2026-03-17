@@ -306,6 +306,10 @@ def analyze_parsed_products(parsed_products):
         "combos_type_coupe": Counter(),
         "combos_type_coll": Counter(),
         "combos_mat_col": Counter(),
+        "combos_type_genre": Counter(),
+        "combos_type_genre_mat": Counter(),
+        "combos_type_genre_col": Counter(),
+        "combos_type_genre_coupe": Counter(),
         "taxonomy": defaultdict(set),
         "total": len(parsed_products),
         "total_in_stock": 0,
@@ -380,6 +384,18 @@ def analyze_parsed_products(parsed_products):
             for mat in p["materials"]:
                 for col in p["colors"]:
                     results["combos_mat_col"][f"{ptype.lower()} {mat.lower()} {col.lower()}"] += 1
+
+        # Gender combos (uniquement en stock)
+        if is_in_stock:
+            for g in p.get("genre", []):
+                g_lower = g.lower()
+                results["combos_type_genre"][f"{ptype.lower()} {g_lower}"] += 1
+                for mat in p["materials"]:
+                    results["combos_type_genre_mat"][f"{ptype.lower()} {g_lower} {mat.lower()}"] += 1
+                for col in p["colors"]:
+                    results["combos_type_genre_col"][f"{ptype.lower()} {g_lower} {col.lower()}"] += 1
+                for coupe in p["coupes"]:
+                    results["combos_type_genre_coupe"][f"{ptype.lower()} {g_lower} {coupe.lower()}"] += 1
 
     return results
 
@@ -541,6 +557,14 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
                 nb_produits = combos_counters.get("type_coll", {}).get(combo_lower, 0)
             elif cat == "Type + Matière + Couleur":
                 nb_produits = combos_counters.get("mat_col", {}).get(combo_lower, 0)
+            elif cat == "Type + Genre":
+                nb_produits = combos_counters.get("type_genre", {}).get(combo_lower, 0)
+            elif cat == "Type + Genre + Matière":
+                nb_produits = combos_counters.get("type_genre_mat", {}).get(combo_lower, 0)
+            elif cat == "Type + Genre + Couleur":
+                nb_produits = combos_counters.get("type_genre_col", {}).get(combo_lower, 0)
+            elif cat == "Type + Genre + Coupe":
+                nb_produits = combos_counters.get("type_genre_coupe", {}).get(combo_lower, 0)
         rows.append({
             "Mot-clé": combo_kw,
             "Nb produits": nb_produits if nb_produits else None,
@@ -680,7 +704,8 @@ def build_excel(results, df_matched, store_name):
     # 8. Mots-clés SEO — 8 colonnes, chaque colonne liste TOUTES ses combos indépendamment
     ws8 = wb.create_sheet("🔑 Mots-clés SEO")
     headers_seo = ["cat", "cat + sous cat", "cat + matières", "cat + couleurs",
-                    "cat + coupes", "cat + formes", "cat + motifs", "cat + saisons"]
+                    "cat + coupes", "cat + formes", "cat + motifs", "cat + saisons",
+                    "cat + genre", "cat + genre + matière", "cat + genre + couleur", "cat + genre + coupe"]
     ws8.append(headers_seo)
     style_header(ws8, len(headers_seo))
 
@@ -710,8 +735,28 @@ def build_excel(results, df_matched, store_name):
     col_motifs = build_combos(motifs_list)
     col_saisons = build_combos(saisons_list)
 
+    genres_list = sorted(results["genre_count"].keys()) if results.get("genre_count") else []
+
+    def build_genre_combos(attr_list=None):
+        """Build type x genre (x attr) combos."""
+        combos = []
+        for t in types_list:
+            for g in genres_list:
+                if attr_list:
+                    for attr in attr_list:
+                        combos.append(f"{t.lower()} {g.lower()} {attr.lower()}")
+                else:
+                    combos.append(f"{t.lower()} {g.lower()}")
+        return combos
+
+    col_genre = build_genre_combos()
+    col_genre_mat = build_genre_combos(mats_list)
+    col_genre_col = build_genre_combos(cols_list)
+    col_genre_coupe = build_genre_combos(coupes_list)
+
     all_columns = [col_cat, col_sous_cat, col_matieres, col_couleurs,
-                    col_coupes, col_formes, col_motifs, col_saisons]
+                    col_coupes, col_formes, col_motifs, col_saisons,
+                    col_genre, col_genre_mat, col_genre_col, col_genre_coupe]
     max_rows = max(len(c) for c in all_columns) if all_columns else 0
 
     for i in range(max_rows):
@@ -773,6 +818,18 @@ def build_excel(results, df_matched, store_name):
     if results.get("combos_mat_col"):
         current_row = write_combo_section(ws9, "🔗 Type + Matière + Couleur", "Ex: chemise coton bleu...",
                                            results["combos_mat_col"], current_row)
+    if results.get("combos_type_genre"):
+        current_row = write_combo_section(ws9, "👤 Type + Genre", "Ex: chemise homme, pull femme...",
+                                           results["combos_type_genre"], current_row)
+    if results.get("combos_type_genre_mat"):
+        current_row = write_combo_section(ws9, "👤🧵 Type + Genre + Matière", "Ex: chemise homme coton, pull homme laine...",
+                                           results["combos_type_genre_mat"], current_row)
+    if results.get("combos_type_genre_col"):
+        current_row = write_combo_section(ws9, "👤🎨 Type + Genre + Couleur", "Ex: chemise homme bleu, pull homme vert...",
+                                           results["combos_type_genre_col"], current_row)
+    if results.get("combos_type_genre_coupe"):
+        current_row = write_combo_section(ws9, "👤📐 Type + Genre + Coupe", "Ex: chemise homme slim, pantalon homme ajustée...",
+                                           results["combos_type_genre_coupe"], current_row)
 
     # 10. Requêtes vs Pages — matching ref format
     if df_matched is not None and not df_matched.empty:
@@ -965,6 +1022,24 @@ if has_products:
             mat = parts[1].capitalize() if len(parts) >= 2 else ""
             combos_with_materials[combo_key] = [mat] if mat else []
         combos_category[combo_key] = "Type + Matière + Couleur"
+    for combo_key in results.get("combos_type_genre", {}):
+        if combo_key not in combos_with_materials:
+            combos_with_materials[combo_key] = []
+        combos_category[combo_key] = "Type + Genre"
+    for combo_key in results.get("combos_type_genre_mat", {}):
+        if combo_key not in combos_with_materials:
+            parts = combo_key.split()
+            mat = parts[2].capitalize() if len(parts) >= 3 else ""
+            combos_with_materials[combo_key] = [mat] if mat else []
+        combos_category[combo_key] = "Type + Genre + Matière"
+    for combo_key in results.get("combos_type_genre_col", {}):
+        if combo_key not in combos_with_materials:
+            combos_with_materials[combo_key] = []
+        combos_category[combo_key] = "Type + Genre + Couleur"
+    for combo_key in results.get("combos_type_genre_coupe", {}):
+        if combo_key not in combos_with_materials:
+            combos_with_materials[combo_key] = []
+        combos_category[combo_key] = "Type + Genre + Coupe"
 
 if not combos_with_materials and df_keywords is not None:
     for _, row in df_keywords.iterrows():
@@ -980,6 +1055,10 @@ if has_ahrefs and combos_with_materials:
             "type_coupe": results.get("combos_type_coupe", {}),
             "type_coll": results.get("combos_type_coll", {}),
             "mat_col": results.get("combos_mat_col", {}),
+            "type_genre": results.get("combos_type_genre", {}),
+            "type_genre_mat": results.get("combos_type_genre_mat", {}),
+            "type_genre_col": results.get("combos_type_genre_col", {}),
+            "type_genre_coupe": results.get("combos_type_genre_coupe", {}),
         }
     df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters, combos_category)
 
