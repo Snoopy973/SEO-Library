@@ -455,6 +455,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         for _, row in df_pages.iterrows():
             kw = str(row.get("Top keyword", "")).strip().lower()
             url = str(row.get("URL", ""))
+            url_lower = url.lower()
             if kw:
                 page_index[kw] = {
                     "url": url,
@@ -464,7 +465,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
                     "top_keyword": row.get("Top keyword", ""),
                 }
             if url:
-                url_index[url.lower()] = page_index.get(kw, {
+                url_index[url_lower] = page_index.get(kw, {
                     "url": url,
                     "position": row.get("Top keyword: Position", ""),
                     "traffic": row.get("Traffic", 0),
@@ -501,40 +502,26 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         top_kw_page = page_data.get("top_keyword", "")
         nb_kw_page = page_data.get("keywords_count", 0)
 
-        # 2. Partial match: slug in URL
+        # Determine correspondance based on exact top keyword match only
         correspondance = ""
-        if not page_url and df_pages is not None:
-            slug = combo_lower.replace(" ", "-")
-            for _, prow in df_pages.iterrows():
-                url = str(prow.get("URL", "")).lower()
-                if slug in url:
-                    page_url = prow.get("URL", "")
-                    position = prow.get("Top keyword: Position", "")
-                    traffic = prow.get("Traffic", 0)
-                    top_kw_page = prow.get("Top keyword", "")
-                    nb_kw_page = prow.get("Keywords", 0)
-                    # Check if it's a dedicated page or partial
-                    url_path = url.split("/")[-1] if "/" in url else url
-                    if slug == url_path or slug == url_path.replace("-homme", "").replace("-femme", ""):
-                        correspondance = "Page dédiée"
-                    else:
-                        correspondance = "Page partielle"
-                    break
-
-        # Determine correspondance and action
-        if page_url and not correspondance:
-            try:
-                pos_int = int(float(str(position)))
-            except (ValueError, TypeError):
-                pos_int = 99
-            # Check if the page URL slug matches the keyword closely
+        page_type_detected = ""
+        if page_url:
             slug = combo_lower.replace(" ", "-")
             url_lower = page_url.lower()
             if slug in url_lower:
                 correspondance = "Page dédiée"
             else:
                 correspondance = "Page partielle"
-        elif not page_url:
+            # Detect page type
+            if "/collections/" in url_lower or "/categorie/" in url_lower or "/c/" in url_lower:
+                page_type_detected = "Collection"
+            elif "/products/" in url_lower or "/product/" in url_lower:
+                page_type_detected = "Produit"
+            elif "/blog/" in url_lower or "/journal/" in url_lower:
+                page_type_detected = "Blog"
+            else:
+                page_type_detected = "Autre"
+        else:
             correspondance = "Pas de page"
 
         # Determine action
@@ -585,6 +572,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             "Potentiel trafic": tp,
             "CPC (€)": cpc,
             "Correspondance": correspondance,
+            "Type page": page_type_detected if page_type_detected else None,
             "URL": page_url if page_url else None,
             "Trafic page": traffic if traffic else None,
             "Top KW page": top_kw_page if top_kw_page else None,
