@@ -468,22 +468,44 @@ def _is_dedicated_url(kw_words, url_path):
     return url_content_words <= kw_all_forms
 
 
+def _find_col(df, candidates):
+    """Find first matching column name (case-insensitive)."""
+    col_map = {c.lower().strip(): c for c in df.columns}
+    for c in candidates:
+        if c.lower() in col_map:
+            return col_map[c.lower()]
+    return None
+
+
 def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None, df_internal=None):
     rows = []
+
+    # Detect column names
+    url_col = "URL"
+    top_kw_col = "Top keyword"
+    top_kw_pos_col = "Top keyword: Position"
+    traffic_col = "Traffic"
+    kw_count_col = "Keywords"
+    if df_pages is not None and not df_pages.empty:
+        url_col = _find_col(df_pages, ["URL", "url", "Page URL", "Current URL", "Address"]) or "URL"
+        top_kw_col = _find_col(df_pages, ["Top keyword", "top keyword", "Top Keyword"]) or "Top keyword"
+        top_kw_pos_col = _find_col(df_pages, ["Top keyword: Position", "Position"]) or "Top keyword: Position"
+        traffic_col = _find_col(df_pages, ["Traffic", "Organic traffic", "traffic"]) or "Traffic"
+        kw_count_col = _find_col(df_pages, ["Keywords", "Organic keywords", "keywords"]) or "Keywords"
 
     # Build page index by top keyword
     page_index = {}
     if df_pages is not None and not df_pages.empty:
         for _, row in df_pages.iterrows():
-            kw = str(row.get("Top keyword", "")).strip().lower()
-            url = str(row.get("URL", ""))
+            kw = str(row.get(top_kw_col, "")).strip().lower()
+            url = str(row.get(url_col, ""))
             if kw:
                 page_index[kw] = {
                     "url": url,
-                    "position": row.get("Top keyword: Position", ""),
-                    "traffic": row.get("Traffic", 0),
-                    "keywords_count": row.get("Keywords", 0),
-                    "top_keyword": row.get("Top keyword", ""),
+                    "position": row.get(top_kw_pos_col, ""),
+                    "traffic": row.get(traffic_col, 0),
+                    "keywords_count": row.get(kw_count_col, 0),
+                    "top_keyword": row.get(top_kw_col, ""),
                 }
 
     # Build volume index
@@ -513,7 +535,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         # Cherche dans Top Pages Ahrefs + pages internes
         all_url_sources = []
         if df_pages is not None and not df_pages.empty:
-            all_url_sources.extend(df_pages["URL"].dropna().tolist())
+            all_url_sources.extend(df_pages[url_col].dropna().tolist())
         if df_internal is not None and not df_internal.empty:
             all_url_sources.extend(df_internal["URL"].dropna().tolist())
         slug = combo_lower.replace(" ", "-")
@@ -976,17 +998,27 @@ with st.sidebar:
 
     st.divider()
 
+    with st.expander("ℹ️ **À quoi sert chaque fichier ?**", expanded=False):
+        st.markdown("""
+| # | Fichier | Source | Utilité |
+|---|---|---|---|
+| 1 | **URL du site** | Shopify / WooCommerce | Récupère le catalogue produits (types, matières, couleurs) pour générer les combinaisons de mots-clés |
+| 2 | **CSV Keywords** | Ahrefs → Keywords Explorer | Fournit le **volume de recherche**, KD et CPC de chaque mot-clé pour calculer le score de priorité |
+| 3 | **CSV Top Pages** | Ahrefs → Top Pages | Identifie les **pages déjà positionnées** (URL, position, trafic, top keyword) |
+| 4 | **Pages internes** *(optionnel)* | Screaming Frog / Sitemap / Crawl | Liste complète des URLs du site pour détecter les **pages consacrées** même si elles n'apparaissent pas dans Ahrefs (pas encore indexées, pas de trafic…) |
+""")
+
     st.markdown("**2. Mots-clés Ahrefs**")
     uploaded_kw = st.file_uploader("CSV Keywords", type=["csv"], key="ac_kw",
-                                    help="Export Ahrefs Keywords Explorer")
+                                    help="Export Ahrefs Keywords Explorer → Volume, KD, CPC")
 
     st.markdown("**3. Top Pages Ahrefs**")
     uploaded_pages = st.file_uploader("CSV Top Pages", type=["csv"], key="ac_pages",
-                                       help="Export Ahrefs Top Pages")
+                                       help="Export Ahrefs Top Pages → Pages positionnées, positions, trafic")
 
-    st.markdown("**4. Pages internes du site** *(optionnel)*")
-    uploaded_internal = st.file_uploader("CSV/TXT interne_html", type=["csv", "txt", "xlsx"], key="ac_internal",
-                                          help="Liste des URLs internes (Screaming Frog, sitemap, crawl…). Colonne 'Address' ou 'URL' ou une URL par ligne.")
+    st.markdown("**4. Pages internes** *(optionnel)*")
+    uploaded_internal = st.file_uploader("CSV/TXT pages internes", type=["csv", "txt", "xlsx"], key="ac_internal",
+                                          help="Screaming Frog (colonne Address), sitemap, ou un fichier avec une URL par ligne")
 
     df_keywords = None
     df_pages = None
