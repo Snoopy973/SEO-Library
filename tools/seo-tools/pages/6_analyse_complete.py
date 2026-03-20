@@ -542,7 +542,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         if page_consacree and page_positionnee:
             correspondance = "Page dédiée"
         elif page_consacree:
-            correspondance = "Page dédiée"
+            correspondance = "Page dédiée non positionnée"
         elif page_positionnee:
             correspondance = "Page positionnée"
         else:
@@ -556,15 +556,14 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             except (ValueError, TypeError):
                 pos_int = 99
             action = "Suivre" if pos_int <= 3 else ("Optimiser" if pos_int <= 10 else "Améliorer")
+        elif correspondance == "Page dédiée non positionnée":
+            action = "Indexer / Optimiser"
         else:
-            if page_positionnee:
-                try:
-                    pos_int = int(float(str(position)))
-                except (ValueError, TypeError):
-                    pos_int = 99
-                action = "Suivre" if pos_int <= 3 else ("Optimiser" if pos_int <= 10 else "Améliorer")
-            else:
-                action = "Pas encore positionnée"
+            try:
+                pos_int = int(float(str(position)))
+            except (ValueError, TypeError):
+                pos_int = 99
+            action = "Suivre" if pos_int <= 3 else ("Optimiser" if pos_int <= 10 else "Améliorer")
 
         # Lookup nb produits
         nb_produits = 0
@@ -604,13 +603,20 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
     if not df.empty:
         vol_num = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
         prod_num = pd.to_numeric(df["Nb produits"], errors="coerce").fillna(0)
-        kd_num = pd.to_numeric(df["KD"], errors="coerce").fillna(50)
+        cpc_num = pd.to_numeric(df["CPC (€)"], errors="coerce").fillna(0)
         max_vol = vol_num.max() if vol_num.max() > 0 else 1
+        max_cpc = cpc_num.max() if cpc_num.max() > 0 else 1
+        import numpy as np
         max_prod = prod_num.max() if prod_num.max() > 0 else 1
-        # Score = 40% volume + 30% produits + 30% facilité (100 - KD)
-        # KD élevé = difficile = pénalité, KD bas = facile = bonus
-        facilite = (100 - kd_num) / 100
-        score = ((vol_num / max_vol) * 40 + (prod_num / max_prod) * 30 + facilite * 30).round(0).astype(int)
+        # Score = 50% volume + 30% produits (log, 0 si <3, plafonné à 28) + 20% accessibilité CPC
+        score_vol = (vol_num / max_vol) * 50
+        # Produits: 0 si <3, puis courbe log plafonnée à 28
+        score_prod = prod_num.apply(lambda x: 0 if x < 3 else min(np.log(x) / np.log(28) * 30, 30))
+        # CPC bas = facile, CPC haut = dur SAUF si beaucoup de produits compensent
+        cpc_ratio = cpc_num / max_cpc
+        prod_ratio = prod_num / max_prod
+        score_cpc = (1 - cpc_ratio + cpc_ratio * prod_ratio) * 20
+        score = (score_vol + score_prod + score_cpc).round(0).astype(int)
         df["Score priorité"] = score
         df = df.sort_values("Score priorité", ascending=False)
     return df
@@ -864,6 +870,7 @@ def build_excel(results, df_matched, store_name):
         corresp_colors = {
             "Pas de page": "E74C3C",
             "Page positionnée": "F1C40F",
+            "Page dédiée non positionnée": "3498DB",
             "Page dédiée": "27AE60",
         }
         corresp_col_idx = cols_export.index("Correspondance") + 1
@@ -879,7 +886,7 @@ def build_excel(results, df_matched, store_name):
 
             # Color action column
             action_cell = ws10.cell(row=row_idx, column=action_col_idx)
-            action_colors = {"Créer page": "E74C3C", "Optimiser": "F1C40F", "Améliorer": "E67E22", "Suivre": "27AE60", "Pas encore positionnée": "3498DB"}
+            action_colors = {"Créer page": "E74C3C", "Optimiser": "F1C40F", "Améliorer": "E67E22", "Suivre": "27AE60", "Indexer / Optimiser": "3498DB"}
             ac = action_colors.get(str(action_cell.value), "FFFFFF")
             if ac != "FFFFFF":
                 action_cell.fill = PatternFill(start_color=ac, end_color=ac, fill_type="solid")
@@ -1439,21 +1446,33 @@ if has_ahrefs:
             st.markdown("### 📋 Détail")
             with st.expander("ℹ️ **Comment est calculé le Score de priorité ?**", expanded=False):
                 st.markdown("""
-Le **Score de priorité** (0–100) identifie les mots-clés où Balibaris a le plus à gagner. Il combine 3 facteurs :
+Le **Score de priorité** (0–100) identifie les mots-clés où investir en priorité. Il combine 3 facteurs :
 
 | Facteur | Poids | Logique |
 |---|---|---|
-| 📈 **Volume de recherche** | 40% | Plus le volume est élevé, plus le potentiel de trafic est important |
-| 📦 **Nb produits Balibaris** | 30% | Plus Balibaris a de produits correspondants, plus la page sera riche et pertinente |
-| 🎯 **Facilité (100 − KD)** | 30% | Plus la difficulté (KD) est basse, plus il est facile de se positionner |
+| 📈 **Volume de recherche** | 50% | Plus le volume est élevé, plus le score est haut. C'est la variable dominante. |
+| 📦 **Profondeur catalogue** | 30% | 0 pts si < 3 produits (page trop pauvre). Puis courbe logarithmique plafonnée à 28 produits. Au-delà de 28, le score ne bouge plus. |
+| 💰 **Accessibilité CPC** | 20% | Un CPC bas = mot-clé facile → score max. Un CPC haut = mot-clé concurrentiel → score bas **sauf si** vous avez beaucoup de produits pour rivaliser. |
 
 **Formule :**
 ```
-Score = (Volume / Vol_max) × 40 + (Nb_produits / Prod_max) × 30 + ((100 − KD) / 100) × 30
+cpc_ratio  = CPC / CPC_max
+prod_ratio = Nb_produits / Nb_produits_max
+
+Score = (Volume / Vol_max) × 50
+      + log(Nb_produits) / log(28) × 30      [0 si < 3 produits]
+      + (1 - cpc_ratio + cpc_ratio × prod_ratio) × 20
 ```
 
-**Lecture :** Un score de **85+** = mot-clé à fort volume, beaucoup de produits, et faible concurrence → **priorité maximale**.
-Un score de **30−** = peu de volume ou forte concurrence → à traiter plus tard.
+**Exemples :**
+| Cas | Volume | Produits | CPC | Score CPC (sur 20) |
+|---|---|---|---|---|
+| CPC bas, peu importe les produits | — | 5 | 0.10€ | ~18 pts ✅ Facile |
+| CPC haut + beaucoup de produits | — | 50 | 1.00€ | ~20 pts ✅ Dur mais catalogue solide |
+| CPC haut + peu de produits | — | 3 | 1.00€ | ~1 pt ❌ Dur et pas assez de produits |
+
+**Lecture :** Un score **85+** = fort volume, catalogue suffisant, mot-clé accessible → **priorité maximale**.
+Un score bas = peu de volume, moins de 3 produits, ou CPC élevé sans catalogue suffisant.
 """)
             display_cols = [c for c in df_display.columns if not c.startswith("_")]
             st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True,
