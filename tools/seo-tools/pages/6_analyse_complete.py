@@ -455,7 +455,6 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         for _, row in df_pages.iterrows():
             kw = str(row.get("Top keyword", "")).strip().lower()
             url = str(row.get("URL", ""))
-            url_lower = url.lower()
             if kw:
                 page_index[kw] = {
                     "url": url,
@@ -465,7 +464,7 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
                     "top_keyword": row.get("Top keyword", ""),
                 }
             if url:
-                url_index[url_lower] = page_index.get(kw, {
+                url_index[url.lower()] = page_index.get(kw, {
                     "url": url,
                     "position": row.get("Top keyword: Position", ""),
                     "traffic": row.get("Traffic", 0),
@@ -502,26 +501,84 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         top_kw_page = page_data.get("top_keyword", "")
         nb_kw_page = page_data.get("keywords_count", 0)
 
-        # Determine correspondance based on exact top keyword match only
+        # 2. Partial match: slug in URL (with plural/singular support)
         correspondance = ""
-        page_type_detected = ""
-        if page_url:
+        if not page_url and df_pages is not None:
+            slug = combo_lower.replace(" ", "-")
+            stop_words = {"en", "de", "du", "des", "le", "la", "les", "un", "une", "pour", "avec", "et", "homme", "femme"}
+            kw_words = [w for w in combo_lower.split() if w not in stop_words and len(w) > 1]
+            for _, prow in df_pages.iterrows():
+                url = str(prow.get("URL", "")).lower()
+                url_path = url.split("/")[-1] if "/" in url else url
+                url_segments = set(url_path.replace("-", " ").split())
+                # Exact slug match first
+                if slug in url:
+                    match_type = "exact"
+                else:
+                    # Fuzzy: check all keyword words appear in URL (handle plurals)
+                    match_type = None
+                    if kw_words:
+                        all_found = True
+                        for w in kw_words:
+                            w_plural = w + "s" if not w.endswith("s") else w
+                            w_singular = w[:-1] if w.endswith("s") and len(w) > 2 else w
+                            if not (w in url_path or w_plural in url_path or w_singular in url_path):
+                                all_found = False
+                                break
+                        if all_found:
+                            match_type = "words"
+                if match_type:
+                    page_url = prow.get("URL", "")
+                    position = prow.get("Top keyword: Position", "")
+                    traffic = prow.get("Traffic", 0)
+                    top_kw_page = prow.get("Top keyword", "")
+                    nb_kw_page = prow.get("Keywords", 0)
+                    if match_type == "exact" and (slug == url_path or slug == url_path.replace("-homme", "").replace("-femme", "")):
+                        correspondance = "Page dédiée"
+                    elif match_type == "words":
+                        # Check if URL path contains mostly keyword words (dedicated) or has extra content (partial)
+                        url_content_words = url_segments - stop_words - {"homme", "femme"}
+                        kw_set = set(kw_words)
+                        kw_set_plural = {w + "s" if not w.endswith("s") else w for w in kw_words}
+                        kw_set_singular = {w[:-1] if w.endswith("s") and len(w) > 2 else w for w in kw_words}
+                        kw_all_forms = kw_set | kw_set_plural | kw_set_singular
+                        if url_content_words <= kw_all_forms:
+                            correspondance = "Page dédiée"
+                        else:
+                            correspondance = "Page partielle"
+                    else:
+                        correspondance = "Page partielle"
+                    break
+
+        # Determine correspondance and action
+        if page_url and not correspondance:
+            try:
+                pos_int = int(float(str(position)))
+            except (ValueError, TypeError):
+                pos_int = 99
             slug = combo_lower.replace(" ", "-")
             url_lower = page_url.lower()
+            url_path = url_lower.split("/")[-1] if "/" in url_lower else url_lower
             if slug in url_lower:
                 correspondance = "Page dédiée"
             else:
-                correspondance = "Page partielle"
-            # Detect page type
-            if "/collections/" in url_lower or "/categorie/" in url_lower or "/c/" in url_lower:
-                page_type_detected = "Collection"
-            elif "/products/" in url_lower or "/product/" in url_lower:
-                page_type_detected = "Produit"
-            elif "/blog/" in url_lower or "/journal/" in url_lower:
-                page_type_detected = "Blog"
-            else:
-                page_type_detected = "Autre"
-        else:
+                # Check with plural/singular word matching
+                stop_words_check = {"en", "de", "du", "des", "le", "la", "les", "un", "une", "pour", "avec", "et", "homme", "femme"}
+                kw_words_check = [w for w in combo_lower.split() if w not in stop_words_check and len(w) > 1]
+                all_found = True
+                for w in kw_words_check:
+                    w_plural = w + "s" if not w.endswith("s") else w
+                    w_singular = w[:-1] if w.endswith("s") and len(w) > 2 else w
+                    if not (w in url_path or w_plural in url_path or w_singular in url_path):
+                        all_found = False
+                        break
+                if all_found and kw_words_check:
+                    url_content_words = set(url_path.replace("-", " ").split()) - stop_words_check - {"homme", "femme"}
+                    kw_all = set(kw_words_check) | {w + "s" for w in kw_words_check if not w.endswith("s")} | {w[:-1] for w in kw_words_check if w.endswith("s") and len(w) > 2}
+                    correspondance = "Page dédiée" if url_content_words <= kw_all else "Page partielle"
+                else:
+                    correspondance = "Page partielle"
+        elif not page_url:
             correspondance = "Pas de page"
 
         # Determine action
@@ -572,7 +629,6 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
             "Potentiel trafic": tp,
             "CPC (€)": cpc,
             "Correspondance": correspondance,
-            "Type page": page_type_detected if page_type_detected else None,
             "URL": page_url if page_url else None,
             "Trafic page": traffic if traffic else None,
             "Top KW page": top_kw_page if top_kw_page else None,
