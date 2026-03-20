@@ -468,7 +468,7 @@ def _is_dedicated_url(kw_words, url_path):
     return url_content_words <= kw_all_forms
 
 
-def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None):
+def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None, df_internal=None):
     rows = []
 
     # Build page index by top keyword
@@ -510,19 +510,22 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
 
         # ── Étape 1 : Page consacrée (matching par URL/slug) ──
         page_consacree = ""
+        # Cherche dans Top Pages Ahrefs + pages internes
+        all_url_sources = []
         if df_pages is not None and not df_pages.empty:
-            slug = combo_lower.replace(" ", "-")
-            for _, prow in df_pages.iterrows():
-                url = str(prow.get("URL", "")).lower()
-                url_path = url.split("/")[-1] if "/" in url else url
-                # Exact slug match
-                if slug in url:
-                    page_consacree = prow.get("URL", "")
-                    break
-                # Word-level match with plural/singular
-                if _url_words_match(kw_words, url_path) and _is_dedicated_url(kw_words, url_path):
-                    page_consacree = prow.get("URL", "")
-                    break
+            all_url_sources.extend(df_pages["URL"].dropna().tolist())
+        if df_internal is not None and not df_internal.empty:
+            all_url_sources.extend(df_internal["URL"].dropna().tolist())
+        slug = combo_lower.replace(" ", "-")
+        for src_url in all_url_sources:
+            url = str(src_url).lower()
+            url_path = url.split("/")[-1] if "/" in url else url
+            if slug in url:
+                page_consacree = str(src_url)
+                break
+            if _url_words_match(kw_words, url_path) and _is_dedicated_url(kw_words, url_path):
+                page_consacree = str(src_url)
+                break
 
         # ── Étape 2 : Page positionnée (matching par Top keyword Ahrefs) ──
         page_positionnee = ""
@@ -981,6 +984,10 @@ with st.sidebar:
     uploaded_pages = st.file_uploader("CSV Top Pages", type=["csv"], key="ac_pages",
                                        help="Export Ahrefs Top Pages")
 
+    st.markdown("**4. Pages internes du site** *(optionnel)*")
+    uploaded_internal = st.file_uploader("CSV/TXT interne_html", type=["csv", "txt", "xlsx"], key="ac_internal",
+                                          help="Liste des URLs internes (Screaming Frog, sitemap, crawl…). Colonne 'Address' ou 'URL' ou une URL par ligne.")
+
     df_keywords = None
     df_pages = None
 
@@ -997,6 +1004,49 @@ with st.sidebar:
         st.success(f"✅ {len(df_pages)} pages")
     elif "ac_df_pages" in st.session_state:
         df_pages = st.session_state["ac_df_pages"]
+
+    df_internal = None
+    if uploaded_internal:
+        try:
+            fname = uploaded_internal.name.lower()
+            if fname.endswith(".xlsx"):
+                df_internal = pd.read_excel(uploaded_internal)
+            else:
+                content_bytes = uploaded_internal.read()
+                for enc in ["utf-8", "latin-1", "cp1252"]:
+                    try:
+                        text = content_bytes.decode(enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                import io
+                try:
+                    df_internal = pd.read_csv(io.StringIO(text))
+                except Exception:
+                    df_internal = pd.DataFrame({"URL": [l.strip() for l in text.splitlines() if l.strip().startswith("http")]})
+            url_col = None
+            for c in df_internal.columns:
+                if c.lower() in ("address", "url", "adresse", "loc"):
+                    url_col = c
+                    break
+            if url_col is None:
+                for c in df_internal.columns:
+                    if df_internal[c].astype(str).str.startswith("http").any():
+                        url_col = c
+                        break
+            if url_col:
+                df_internal = df_internal[[url_col]].rename(columns={url_col: "URL"}).dropna()
+                df_internal = df_internal[df_internal["URL"].astype(str).str.startswith("http")]
+                st.session_state["ac_df_internal"] = df_internal
+                st.success(f"✅ {len(df_internal)} URLs internes chargées")
+            else:
+                st.warning("⚠️ Aucune colonne URL trouvée dans le fichier")
+                df_internal = None
+        except Exception as e:
+            st.error(f"Erreur lecture fichier interne: {e}")
+            df_internal = None
+    elif "ac_df_internal" in st.session_state:
+        df_internal = st.session_state["ac_df_internal"]
 
 
 # ═════════════════════════════════════════════
@@ -1081,7 +1131,7 @@ if has_ahrefs and combos_with_materials:
             "type_genre_col": results.get("combos_type_genre_col", {}),
             "type_genre_coupe": results.get("combos_type_genre_coupe", {}),
         }
-    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters, combos_category)
+    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters, combos_category, df_internal=df_internal)
 
 
 # ── TABS ──
