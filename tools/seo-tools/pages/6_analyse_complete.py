@@ -445,12 +445,34 @@ def detect_ahrefs_type(df):
 # MATCHING KEYWORDS VS PAGES
 # ═════════════════════════════════════════════
 
+def _url_words_match(kw_words, url_path):
+    """Check if all keyword words appear in URL path (handling plurals)."""
+    stop_words = {"en", "de", "du", "des", "le", "la", "les", "un", "une", "pour", "avec", "et", "homme", "femme"}
+    words = [w for w in kw_words if w not in stop_words and len(w) > 1]
+    if not words:
+        return False
+    for w in words:
+        w_plural = w + "s" if not w.endswith("s") else w
+        w_singular = w[:-1] if w.endswith("s") and len(w) > 2 else w
+        if not (w in url_path or w_plural in url_path or w_singular in url_path):
+            return False
+    return True
+
+
+def _is_dedicated_url(kw_words, url_path):
+    """Check if URL is dedicated (only contains keyword words) vs partial (has extra content)."""
+    stop_words = {"en", "de", "du", "des", "le", "la", "les", "un", "une", "pour", "avec", "et", "homme", "femme"}
+    url_content_words = set(url_path.replace("-", " ").split()) - stop_words - {"homme", "femme"}
+    kw_set = set(w for w in kw_words if w not in stop_words and len(w) > 1)
+    kw_all_forms = kw_set | {w + "s" for w in kw_set if not w.endswith("s")} | {w[:-1] for w in kw_set if w.endswith("s") and len(w) > 2}
+    return url_content_words <= kw_all_forms
+
+
 def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None):
     rows = []
 
-    # Build page index by top keyword AND by URL slugs
+    # Build page index by top keyword
     page_index = {}
-    url_index = {}
     if df_pages is not None and not df_pages.empty:
         for _, row in df_pages.iterrows():
             kw = str(row.get("Top keyword", "")).strip().lower()
@@ -463,14 +485,6 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
                     "keywords_count": row.get("Keywords", 0),
                     "top_keyword": row.get("Top keyword", ""),
                 }
-            if url:
-                url_index[url.lower()] = page_index.get(kw, {
-                    "url": url,
-                    "position": row.get("Top keyword: Position", ""),
-                    "traffic": row.get("Traffic", 0),
-                    "keywords_count": row.get("Keywords", 0),
-                    "top_keyword": row.get("Top keyword", ""),
-                })
 
     # Build volume index
     vol_index = {}
@@ -492,144 +506,92 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         kd = vol_data.get("kd", "N/A")
         cpc = vol_data.get("cpc", "N/A")
         tp = vol_data.get("traffic_potential", "N/A")
+        kw_words = combo_lower.split()
 
-        # 1. Exact match on top keyword
-        page_data = page_index.get(combo_lower, {})
-        page_url = page_data.get("url", "")
-        position = page_data.get("position", "")
-        traffic = page_data.get("traffic", 0)
-        top_kw_page = page_data.get("top_keyword", "")
-        nb_kw_page = page_data.get("keywords_count", 0)
-
-        # 2. Partial match: slug in URL (with plural/singular support)
-        correspondance = ""
-        if not page_url and df_pages is not None:
+        # ── Étape 1 : Page consacrée (matching par URL/slug) ──
+        page_consacree = ""
+        if df_pages is not None and not df_pages.empty:
             slug = combo_lower.replace(" ", "-")
-            stop_words = {"en", "de", "du", "des", "le", "la", "les", "un", "une", "pour", "avec", "et", "homme", "femme"}
-            kw_words = [w for w in combo_lower.split() if w not in stop_words and len(w) > 1]
             for _, prow in df_pages.iterrows():
                 url = str(prow.get("URL", "")).lower()
                 url_path = url.split("/")[-1] if "/" in url else url
-                url_segments = set(url_path.replace("-", " ").split())
-                # Exact slug match first
+                # Exact slug match
                 if slug in url:
-                    match_type = "exact"
-                else:
-                    # Fuzzy: check all keyword words appear in URL (handle plurals)
-                    match_type = None
-                    if kw_words:
-                        all_found = True
-                        for w in kw_words:
-                            w_plural = w + "s" if not w.endswith("s") else w
-                            w_singular = w[:-1] if w.endswith("s") and len(w) > 2 else w
-                            if not (w in url_path or w_plural in url_path or w_singular in url_path):
-                                all_found = False
-                                break
-                        if all_found:
-                            match_type = "words"
-                if match_type:
-                    page_url = prow.get("URL", "")
-                    position = prow.get("Top keyword: Position", "")
-                    traffic = prow.get("Traffic", 0)
-                    top_kw_page = prow.get("Top keyword", "")
-                    nb_kw_page = prow.get("Keywords", 0)
-                    if match_type == "exact" and (slug == url_path or slug == url_path.replace("-homme", "").replace("-femme", "")):
-                        correspondance = "Page dédiée"
-                    elif match_type == "words":
-                        # Check if URL path contains mostly keyword words (dedicated) or has extra content (partial)
-                        url_content_words = url_segments - stop_words - {"homme", "femme"}
-                        kw_set = set(kw_words)
-                        kw_set_plural = {w + "s" if not w.endswith("s") else w for w in kw_words}
-                        kw_set_singular = {w[:-1] if w.endswith("s") and len(w) > 2 else w for w in kw_words}
-                        kw_all_forms = kw_set | kw_set_plural | kw_set_singular
-                        if url_content_words <= kw_all_forms:
-                            correspondance = "Page dédiée"
-                        else:
-                            correspondance = "Page partielle"
-                    else:
-                        correspondance = "Page partielle"
+                    page_consacree = prow.get("URL", "")
+                    break
+                # Word-level match with plural/singular
+                if _url_words_match(kw_words, url_path) and _is_dedicated_url(kw_words, url_path):
+                    page_consacree = prow.get("URL", "")
                     break
 
-        # Determine correspondance and action
-        if page_url and not correspondance:
-            try:
-                pos_int = int(float(str(position)))
-            except (ValueError, TypeError):
-                pos_int = 99
-            slug = combo_lower.replace(" ", "-")
-            url_lower = page_url.lower()
-            url_path = url_lower.split("/")[-1] if "/" in url_lower else url_lower
-            if slug in url_lower:
-                correspondance = "Page dédiée"
-            else:
-                # Check with plural/singular word matching
-                stop_words_check = {"en", "de", "du", "des", "le", "la", "les", "un", "une", "pour", "avec", "et", "homme", "femme"}
-                kw_words_check = [w for w in combo_lower.split() if w not in stop_words_check and len(w) > 1]
-                all_found = True
-                for w in kw_words_check:
-                    w_plural = w + "s" if not w.endswith("s") else w
-                    w_singular = w[:-1] if w.endswith("s") and len(w) > 2 else w
-                    if not (w in url_path or w_plural in url_path or w_singular in url_path):
-                        all_found = False
-                        break
-                if all_found and kw_words_check:
-                    url_content_words = set(url_path.replace("-", " ").split()) - stop_words_check - {"homme", "femme"}
-                    kw_all = set(kw_words_check) | {w + "s" for w in kw_words_check if not w.endswith("s")} | {w[:-1] for w in kw_words_check if w.endswith("s") and len(w) > 2}
-                    correspondance = "Page dédiée" if url_content_words <= kw_all else "Page partielle"
-                else:
-                    correspondance = "Page partielle"
-        elif not page_url:
+        # ── Étape 2 : Page positionnée (matching par Top keyword Ahrefs) ──
+        page_positionnee = ""
+        position = ""
+        traffic = 0
+        top_kw_page = ""
+        nb_kw_page = 0
+        page_data = page_index.get(combo_lower, {})
+        if page_data:
+            page_positionnee = page_data.get("url", "")
+            position = page_data.get("position", "")
+            traffic = page_data.get("traffic", 0)
+            top_kw_page = page_data.get("top_keyword", "")
+            nb_kw_page = page_data.get("keywords_count", 0)
+
+        # ── Correspondance et action ──
+        if page_consacree and page_positionnee:
+            correspondance = "Page dédiée"
+        elif page_consacree:
+            correspondance = "Page dédiée"
+        elif page_positionnee:
+            correspondance = "Page positionnée"
+        else:
             correspondance = "Pas de page"
 
-        # Determine action
         if correspondance == "Pas de page":
             action = "Créer page"
-        elif correspondance == "Page partielle":
-            action = "Optimiser"
-        else:
+        elif correspondance == "Page positionnée":
             try:
                 pos_int = int(float(str(position)))
             except (ValueError, TypeError):
                 pos_int = 99
-            if pos_int <= 3:
-                action = "Suivre"
-            elif pos_int <= 10:
-                action = "Optimiser"
+            action = "Suivre" if pos_int <= 3 else ("Optimiser" if pos_int <= 10 else "Améliorer")
+        else:
+            if page_positionnee:
+                try:
+                    pos_int = int(float(str(position)))
+                except (ValueError, TypeError):
+                    pos_int = 99
+                action = "Suivre" if pos_int <= 3 else ("Optimiser" if pos_int <= 10 else "Améliorer")
             else:
-                action = "Améliorer"
+                action = "Pas encore positionnée"
 
-        # Lookup nb produits in the SPECIFIC counter for this combo's category
+        # Lookup nb produits
         nb_produits = 0
         if combos_counters and combos_category:
             cat = combos_category.get(combo_kw, "")
-            if cat == "Type + Matière":
-                nb_produits = combos_counters.get("type_mat", {}).get(combo_lower, 0)
-            elif cat == "Type + Couleur":
-                nb_produits = combos_counters.get("type_col", {}).get(combo_lower, 0)
-            elif cat == "Type + Coupe":
-                nb_produits = combos_counters.get("type_coupe", {}).get(combo_lower, 0)
-            elif cat == "Type + Collection":
-                nb_produits = combos_counters.get("type_coll", {}).get(combo_lower, 0)
-            elif cat == "Type + Matière + Couleur":
-                nb_produits = combos_counters.get("mat_col", {}).get(combo_lower, 0)
-            elif cat == "Type + Genre":
-                nb_produits = combos_counters.get("type_genre", {}).get(combo_lower, 0)
-            elif cat == "Type + Genre + Matière":
-                nb_produits = combos_counters.get("type_genre_mat", {}).get(combo_lower, 0)
-            elif cat == "Type + Genre + Couleur":
-                nb_produits = combos_counters.get("type_genre_col", {}).get(combo_lower, 0)
-            elif cat == "Type + Genre + Coupe":
-                nb_produits = combos_counters.get("type_genre_coupe", {}).get(combo_lower, 0)
+            counter_map = {
+                "Type + Matière": "type_mat", "Type + Couleur": "type_col",
+                "Type + Coupe": "type_coupe", "Type + Collection": "type_coll",
+                "Type + Matière + Couleur": "mat_col", "Type + Genre": "type_genre",
+                "Type + Genre + Matière": "type_genre_mat", "Type + Genre + Couleur": "type_genre_col",
+                "Type + Genre + Coupe": "type_genre_coupe",
+            }
+            counter_key = counter_map.get(cat, "")
+            if counter_key:
+                nb_produits = combos_counters.get(counter_key, {}).get(combo_lower, 0)
+
         rows.append({
             "Mot-clé": combo_kw,
             "Nb produits": nb_produits if nb_produits else None,
             "Volume": volume,
-            "Position top KW": position if position else None,
             "KD": kd,
             "Potentiel trafic": tp,
             "CPC (€)": cpc,
             "Correspondance": correspondance,
-            "URL": page_url if page_url else None,
+            "Page consacrée": page_consacree if page_consacree else None,
+            "Page positionnée": page_positionnee if page_positionnee else None,
+            "Position": position if position else None,
             "Trafic page": traffic if traffic else None,
             "Top KW page": top_kw_page if top_kw_page else None,
             "Nb KW page": nb_kw_page if nb_kw_page else None,
@@ -889,12 +851,9 @@ def build_excel(results, df_matched, store_name):
     # 10. Requêtes vs Pages — matching ref format
     if df_matched is not None and not df_matched.empty:
         ws10 = wb.create_sheet("🔍 Requêtes vs Pages")
-        url_col_name = f"URL {store_name.capitalize()}" if store_name else "URL"
-        cols_export = ["Mot-clé", "Type combinaison", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
-                        "Correspondance", url_col_name, "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
-        # Map for data extraction (use "URL" from dataframe)
-        cols_data = ["Mot-clé", "Type combinaison", "Nb produits", "Volume", "Score priorité", "Position top KW", "KD", "Potentiel trafic", "CPC (€)",
-                      "Correspondance", "URL", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
+        cols_export = ["Mot-clé", "Type combinaison", "Nb produits", "Volume", "Score priorité", "KD", "Potentiel trafic", "CPC (€)",
+                        "Correspondance", "Page consacrée", "Page positionnée", "Position", "Trafic page", "Top KW page", "Nb KW page", "Action recommandée"]
+        cols_data = cols_export
         ws10.append(cols_export)
         style_header(ws10, len(cols_export))
 
@@ -904,7 +863,7 @@ def build_excel(results, df_matched, store_name):
         # Color correspondance column
         corresp_colors = {
             "Pas de page": "E74C3C",
-            "Page partielle": "F1C40F",
+            "Page positionnée": "F1C40F",
             "Page dédiée": "27AE60",
         }
         corresp_col_idx = cols_export.index("Correspondance") + 1
@@ -920,7 +879,7 @@ def build_excel(results, df_matched, store_name):
 
             # Color action column
             action_cell = ws10.cell(row=row_idx, column=action_col_idx)
-            action_colors = {"Créer page": "E74C3C", "Optimiser": "F1C40F", "Améliorer": "E67E22", "Suivre": "27AE60"}
+            action_colors = {"Créer page": "E74C3C", "Optimiser": "F1C40F", "Améliorer": "E67E22", "Suivre": "27AE60", "Pas encore positionnée": "3498DB"}
             ac = action_colors.get(str(action_cell.value), "FFFFFF")
             if ac != "FFFFFF":
                 action_cell.fill = PatternFill(start_color=ac, end_color=ac, fill_type="solid")
@@ -1499,7 +1458,8 @@ Un score de **30−** = peu de volume ou forte concurrence → à traiter plus t
             display_cols = [c for c in df_display.columns if not c.startswith("_")]
             st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True,
                           column_config={
-                              "URL": st.column_config.LinkColumn("URL"),
+                              "Page consacrée": st.column_config.LinkColumn("Page consacrée"),
+                              "Page positionnée": st.column_config.LinkColumn("Page positionnée"),
                               "Volume": st.column_config.NumberColumn("Volume", format="%d"),
                               "Trafic page": st.column_config.NumberColumn("Trafic page", format="%d"),
                           })
