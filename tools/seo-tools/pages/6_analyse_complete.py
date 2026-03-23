@@ -502,6 +502,9 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
     for combo_kw, materials in combos_with_materials.items():
         combo_lower = combo_kw.lower().strip()
         vol_data = vol_index.get(combo_lower, {})
+        # Skip combos not present in Ahrefs CSV
+        if not vol_data:
+            continue
         volume = vol_data.get("volume", "N/A")
         kd = vol_data.get("kd", "N/A")
         cpc = vol_data.get("cpc", "N/A")
