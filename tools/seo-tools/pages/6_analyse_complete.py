@@ -512,7 +512,8 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
         page_consacree = ""
         all_url_sources = []
         if df_pages is not None and not df_pages.empty:
-            all_url_sources.extend(df_pages[url_col].dropna().tolist())
+            _url_col = _find_col(df_pages, ["URL", "url", "Page URL", "Current URL", "Address"]) or "URL"
+            all_url_sources.extend(df_pages[_url_col].dropna().tolist())
         if df_internal is not None and not df_internal.empty:
             int_url_col = _find_col(df_internal, ["URL", "url", "Address", "Page URL"]) or "URL"
             all_url_sources.extend(df_internal[int_url_col].dropna().tolist())
