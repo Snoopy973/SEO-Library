@@ -502,8 +502,8 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
     for combo_kw, materials in combos_with_materials.items():
         combo_lower = combo_kw.lower().strip()
         vol_data = vol_index.get(combo_lower, {})
-        # Skip combos not present in Ahrefs CSV
-        if not vol_data:
+        # Skip combos not in Ahrefs CSV or without volume
+        if not vol_data or not vol_data.get("volume") or pd.isna(vol_data.get("volume", 0)):
             continue
         volume = vol_data.get("volume", "N/A")
         kd = vol_data.get("kd", "N/A")
@@ -647,12 +647,13 @@ def build_excel(results, df_matched, store_name, df_keywords=None):
     wb = Workbook()
     total = results["total"]
 
-    # Build keyword set from Ahrefs CSV for filtering
+    # Build keyword set from Ahrefs CSV for filtering — only keywords WITH volume
     _ahrefs_keywords = set()
     if df_keywords is not None and not df_keywords.empty:
         for _, row in df_keywords.iterrows():
             kw = str(row.get("Keyword", "")).strip().lower()
-            if kw:
+            vol = row.get("Volume", 0)
+            if kw and pd.notna(vol) and vol > 0:
                 _ahrefs_keywords.add(kw)
 
     hf = PatternFill(start_color="1B2A4A", end_color="1B2A4A", fill_type="solid")
