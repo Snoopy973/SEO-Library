@@ -1497,6 +1497,7 @@ if has_ahrefs:
 
             # Table — hide internal _matiere column
             st.markdown("### 📋 Détail")
+            st.caption("💡 Score = le volume compte d'autant plus que vous avez assez de produits pour rivaliser sur la SERP, et le CPC élevé augmente cette exigence.")
             with st.expander("ℹ️ **Comment est calculé le Score de priorité ?**", expanded=False):
                 st.markdown("""
 Le **Score de priorité** (0–100) identifie les mots-clés où investir en priorité. Il combine 2 facteurs :
