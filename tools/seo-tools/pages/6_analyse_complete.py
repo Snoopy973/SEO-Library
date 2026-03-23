@@ -608,33 +608,26 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        import numpy as np
         vol_num = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
         prod_num = pd.to_numeric(df["Nb produits"], errors="coerce").fillna(0)
         cpc_num = pd.to_numeric(df["CPC (€)"], errors="coerce").fillna(0)
         max_vol = vol_num.max() if vol_num.max() > 0 else 1
         max_cpc = cpc_num.max() if cpc_num.max() > 0 else 1
-        cpc_ratio = cpc_num / max_cpc
+        max_prod = prod_num.max() if prod_num.max() > 0 else 1
 
-        # Seuil de produits basé sur le volume + CPC
-        def get_seuil(vol, cpc_r):
-            if vol > 20000: base = 20
-            elif vol > 10000: base = 15
-            elif vol > 5000: base = 10
-            elif vol > 1000: base = 5
-            else: base = 3
-            return base * (1 + cpc_r)
+        # Seuil = volume / 1000 (min 3) — plus le volume est élevé, plus il faut de produits
+        seuils = (vol_num / 1000).clip(lower=3)
+        # Ratio de couverture plafonné à 1
+        ratio = (prod_num / seuils).clip(upper=1)
+        # Facteur quadratique — un petit déficit est pardonné, un gros est fatal
+        facteur = ratio ** 2
 
-        seuils = pd.Series([get_seuil(v, c) for v, c in zip(vol_num, cpc_ratio)])
-        couverture = (prod_num / seuils).clip(upper=1)
+        # Score = produits (60%) + volume pondéré par facteur (25%) + CPC bas (15%)
+        score_prod = (prod_num / max_prod) * 60
+        score_vol = (vol_num / max_vol) * facteur * 25
+        score_cpc = (1 - cpc_num / max_cpc) * 15
 
-        # Partie 1 : Volume pondéré par la couverture (70 pts)
-        score_vol = (vol_num / max_vol) * couverture * 70
-
-        # Partie 2 : Profondeur catalogue (30 pts) — log plafonné à 28, 0 si < 3
-        score_prod = prod_num.apply(lambda x: 0 if x < 3 else min(np.log(x) / np.log(28) * 30, 30))
-
-        score = (score_vol + score_prod).round(0).astype(int)
+        score = (score_prod + score_vol + score_cpc).round(0).astype(int)
         df["Score priorité"] = score
         df = df.sort_values("Score priorité", ascending=False)
     return df
@@ -1497,38 +1490,39 @@ if has_ahrefs:
 
             # Table — hide internal _matiere column
             st.markdown("### 📋 Détail")
-            st.caption("💡 Score = le volume compte d'autant plus que vous avez assez de produits pour rivaliser sur la SERP, et le CPC élevé augmente cette exigence.")
+            st.caption("💡 Score = priorise les mots-clés où vous avez le plus de produits (60%), puis le volume — mais seulement si votre catalogue est assez profond pour rivaliser sur la SERP (25%), et enfin les mots-clés les moins concurrentiels en CPC (15%).")
             with st.expander("ℹ️ **Comment est calculé le Score de priorité ?**", expanded=False):
                 st.markdown("""
-Le **Score de priorité** (0–100) identifie les mots-clés où investir en priorité. Il combine 2 facteurs :
+Le **Score de priorité** (0–100) identifie les mots-clés où investir en priorité. Il combine 3 facteurs :
 
 | Facteur | Poids | Logique |
 |---|---|---|
-| 📈 **Volume pondéré** | 70% | Le volume est pondéré par votre **capacité à rivaliser** : plus le volume est élevé, plus il faut de produits. Le CPC augmente cette exigence (SERP concurrentielle). |
-| 📦 **Profondeur catalogue** | 30% | 0 pts si < 3 produits. Puis courbe logarithmique plafonnée à 28 produits. |
+| 📦 **Profondeur catalogue** | 60% | Plus vous avez de produits, plus la page sera riche et compétitive. |
+| 📈 **Volume pondéré** | 25% | Le volume ne compte que si vous avez assez de produits pour rivaliser. Plus le volume est élevé, plus il faut de produits (seuil = volume / 1000). La pénalité est quadratique. |
+| 💰 **CPC bas** | 15% | À produits et volume égaux, on priorise les mots-clés les moins concurrentiels. |
 
 **Formule :**
 ```
-seuil = seuil_base(volume) × (1 + CPC/CPC_max)
+seuil   = max(Volume / 1000, 3)
+ratio   = min(Nb_produits / seuil, 1)
+facteur = ratio²
 
-seuil_base : >20K vol → 20 prod | >10K → 15 | >5K → 10 | >1K → 5 | ≤1K → 3
-
-couverture = min(Nb_produits / seuil, 1)
-
-Score = (Volume / Vol_max) × couverture × 70
-      + log(Nb_produits) / log(28) × 30        [0 si < 3 produits]
+Score = (Nb_produits / Nb_produits_max) × 60
+      + (Volume / Vol_max) × facteur × 25
+      + (1 - CPC / CPC_max) × 15
 ```
 
 **Exemples :**
-| Mot-clé | Volume | CPC | Produits | Seuil | Couverture | Score |
-|---|---|---|---|---|---|---|
-| chemise homme | 29 000 | 0.40€ | 28 | 24 | 100% | **69** ✅ |
-| manteau homme | 27 000 | 0.80€ | 3 | 36 | 8% | **13** ⚠️ |
-| chino beige | 800 | 0.10€ | 13 | 3 | 100% | **22** |
-| blouson cuir | 5 000 | 1.00€ | 5 | 20 | 25% | **15** ⚠️ |
+| Mot-clé | Volume | Produits | Seuil | Facteur | Score |
+|---|---|---|---|---|---|
+| chemise homme | 29 000 | 55 | 29 | 1.0 | **86** ✅ |
+| pull homme | 29 000 | 29 | 29 | 1.0 | **59** |
+| blouson homme | 12 000 | 19 | 12 | 1.0 | **40** |
+| chino beige | 500 | 13 | 3 | 1.0 | **28** |
+| manteau homme | 27 000 | 7 | 27 | 0.07 | **10** ⚠️ |
 
-**Lecture :** Un score élevé = fort volume + catalogue suffisant pour rivaliser → **priorité maximale**.
-Un score bas = pas assez de produits pour la concurrence, ou peu de volume.
+**Lecture :** Un score élevé = catalogue profond + volume accessible → **priorité maximale**.
+Un score bas = pas assez de produits pour rivaliser sur ce volume, ou peu de volume.
 """)
             display_cols = [c for c in df_display.columns if not c.startswith("_")]
             st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True,
