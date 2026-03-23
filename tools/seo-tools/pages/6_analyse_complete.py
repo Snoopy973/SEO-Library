@@ -468,7 +468,7 @@ def _is_dedicated_url(kw_words, url_path):
     return url_content_words <= kw_all_forms
 
 
-def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None):
+def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters=None, combos_category=None, df_internal=None):
     rows = []
 
     # Build page index by top keyword
@@ -510,19 +510,22 @@ def match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos
 
         # ── Étape 1 : Page consacrée (matching par URL/slug) ──
         page_consacree = ""
+        all_url_sources = []
         if df_pages is not None and not df_pages.empty:
-            slug = combo_lower.replace(" ", "-")
-            for _, prow in df_pages.iterrows():
-                url = str(prow.get("URL", "")).lower()
-                url_path = url.split("/")[-1] if "/" in url else url
-                # Exact slug match
-                if slug in url:
-                    page_consacree = prow.get("URL", "")
-                    break
-                # Word-level match with plural/singular
-                if _url_words_match(kw_words, url_path) and _is_dedicated_url(kw_words, url_path):
-                    page_consacree = prow.get("URL", "")
-                    break
+            all_url_sources.extend(df_pages[url_col].dropna().tolist())
+        if df_internal is not None and not df_internal.empty:
+            int_url_col = _find_col(df_internal, ["URL", "url", "Address", "Page URL"]) or "URL"
+            all_url_sources.extend(df_internal[int_url_col].dropna().tolist())
+        slug = combo_lower.replace(" ", "-")
+        for src_url in all_url_sources:
+            url = str(src_url).lower()
+            url_path = url.split("/")[-1] if "/" in url else url
+            if slug in url:
+                page_consacree = str(src_url)
+                break
+            if _url_words_match(kw_words, url_path) and _is_dedicated_url(kw_words, url_path):
+                page_consacree = str(src_url)
+                break
 
         # ── Étape 2 : Page positionnée (matching par Top keyword Ahrefs) ──
         page_positionnee = ""
@@ -995,8 +998,13 @@ with st.sidebar:
     uploaded_pages = st.file_uploader("CSV Top Pages", type=["csv"], key="ac_pages",
                                        help="Export Ahrefs Top Pages")
 
+    st.markdown("**4. Pages internes (optionnel)**")
+    uploaded_internal = st.file_uploader("CSV/HTML pages internes", type=["csv", "html"], key="ac_internal",
+                                          help="Export Screaming Frog ou sitemap — liste de toutes les URLs du site")
+
     df_keywords = None
     df_pages = None
+    df_internal = None
 
     if uploaded_kw:
         df_keywords = parse_ahrefs_csv(uploaded_kw)
@@ -1011,6 +1019,21 @@ with st.sidebar:
         st.success(f"✅ {len(df_pages)} pages")
     elif "ac_df_pages" in st.session_state:
         df_pages = st.session_state["ac_df_pages"]
+
+    if uploaded_internal:
+        import re as _re
+        name = uploaded_internal.name.lower()
+        if name.endswith(".csv"):
+            df_internal = parse_ahrefs_csv(uploaded_internal)
+        elif name.endswith(".html"):
+            content = uploaded_internal.read().decode("utf-8", errors="ignore")
+            urls = _re.findall(r'https?://[^\s<>"\']+', content)
+            df_internal = pd.DataFrame({"URL": list(set(urls))})
+        if df_internal is not None and not df_internal.empty:
+            st.session_state["ac_df_internal"] = df_internal
+            st.success(f"✅ {len(df_internal)} pages internes")
+    elif "ac_df_internal" in st.session_state:
+        df_internal = st.session_state["ac_df_internal"]
 
 
 # ═════════════════════════════════════════════
@@ -1095,7 +1118,7 @@ if has_ahrefs and combos_with_materials:
             "type_genre_col": results.get("combos_type_genre_col", {}),
             "type_genre_coupe": results.get("combos_type_genre_coupe", {}),
         }
-    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters, combos_category)
+    df_matched = match_keywords_to_pages(df_keywords, df_pages, combos_with_materials, combos_counters, combos_category, df_internal=df_internal)
 
 
 # ── TABS ──
