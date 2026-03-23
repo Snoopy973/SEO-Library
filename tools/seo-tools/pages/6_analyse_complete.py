@@ -635,10 +635,18 @@ def make_bar(count, max_count):
     return "█" * bars
 
 
-def build_excel(results, df_matched, store_name):
+def build_excel(results, df_matched, store_name, df_keywords=None):
     buffer = BytesIO()
     wb = Workbook()
     total = results["total"]
+
+    # Build keyword set from Ahrefs CSV for filtering
+    _ahrefs_keywords = set()
+    if df_keywords is not None and not df_keywords.empty:
+        for _, row in df_keywords.iterrows():
+            kw = str(row.get("Keyword", "")).strip().lower()
+            if kw:
+                _ahrefs_keywords.add(kw)
 
     hf = PatternFill(start_color="1B2A4A", end_color="1B2A4A", fill_type="solid")
     hfont = Font(bold=True, color="FFFFFF", size=11)
@@ -741,12 +749,14 @@ def build_excel(results, df_matched, store_name):
     motifs_list = sorted(results["motif_count"].keys()) if results.get("motif_count") else []
     saisons_list = sorted(results["saison_count"].keys()) if results.get("saison_count") else []
 
-    # Build each column independently: all combos type x attribute
+    # Build each column independently: only combos present in Ahrefs CSV
     def build_combos(attr_list):
         combos = []
         for t in types_list:
             for attr in attr_list:
-                combos.append(f"{t.lower()} {attr.lower()}")
+                combo = f"{t.lower()} {attr.lower()}"
+                if not _ahrefs_keywords or combo in _ahrefs_keywords:
+                    combos.append(combo)
         return combos
 
     col_cat = types_list
@@ -761,15 +771,19 @@ def build_excel(results, df_matched, store_name):
     genres_list = sorted(results["genre_count"].keys()) if results.get("genre_count") else []
 
     def build_genre_combos(attr_list=None):
-        """Build type x genre (x attr) combos."""
+        """Build type x genre (x attr) combos — only those in Ahrefs CSV."""
         combos = []
         for t in types_list:
             for g in genres_list:
                 if attr_list:
                     for attr in attr_list:
-                        combos.append(f"{t.lower()} {g.lower()} {attr.lower()}")
+                        combo = f"{t.lower()} {g.lower()} {attr.lower()}"
+                        if not _ahrefs_keywords or combo in _ahrefs_keywords:
+                            combos.append(combo)
                 else:
-                    combos.append(f"{t.lower()} {g.lower()}")
+                    combo = f"{t.lower()} {g.lower()}"
+                    if not _ahrefs_keywords or combo in _ahrefs_keywords:
+                        combos.append(combo)
         return combos
 
     col_genre = build_genre_combos()
@@ -793,8 +807,8 @@ def build_excel(results, df_matched, store_name):
 
     # Build vol_index for Ahrefs enrichment
     vol_index = {}
-    if "ac_df_keywords" in st.session_state:
-        for _, row in st.session_state["ac_df_keywords"].iterrows():
+    if df_keywords is not None and not df_keywords.empty:
+        for _, row in df_keywords.iterrows():
             kw = str(row.get("Keyword", "")).strip().lower()
             if kw:
                 vol_index[kw] = {
@@ -811,7 +825,7 @@ def build_excel(results, df_matched, store_name):
         ws.cell(start_row, 1).font = Font(bold=True, size=13)
         ws.append(["Combinaison", "Nb produits", "% du total", None, "Volume", "KD", "Potentiel trafic", "CPC (€)"])
         style_header(ws, 8, row=start_row + 1)
-        combos_sorted = counter.most_common()
+        combos_sorted = [(c, n) for c, n in counter.most_common() if not _ahrefs_keywords or c.lower() in _ahrefs_keywords]
         max_c = combos_sorted[0][1] if combos_sorted else 1
         for combo, count in combos_sorted:
             bar = make_bar(count, max_c)
@@ -1534,7 +1548,7 @@ with tabs[tab_idx]:
         """)
 
         if st.button("💾 Générer le fichier Excel", type="primary", use_container_width=True):
-            excel_data = build_excel(results, df_matched if not df_matched.empty else None, store)
+            excel_data = build_excel(results, df_matched if not df_matched.empty else None, store, df_keywords=df_keywords)
             ts = datetime.now().strftime("%Y%m%d_%H%M")
             st.download_button(
                 "⬇️ Télécharger l'Excel",
